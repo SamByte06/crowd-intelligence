@@ -1,0 +1,80 @@
+{
+  "timestamp": "20-09-2026 21:26:03",
+  "total_people": 1,
+  "overall_risk": 0,
+  "overall_risk_level": "SAFE",
+  "highest_risk_zone": 0,
+  "highest_risk_score": 0,
+  "highest_risk_level": "SAFE",
+  "alert": "NO ALERT",
+  "zones": [
+    {
+      "zone": 0,
+      "people": 0,
+      "density": "LOW",
+      "flow": {
+        "LEFT": 0,
+        "RIGHT": 0,
+        "UP": 0,
+        "DOWN": 0,
+        "STATIONARY": 0
+      },
+      "dominant_direction": "LEFT",
+      "trend": "STABLE",
+      "congestion": "LOW",
+      "risk": 0,
+      "risk_level": "SAFE"
+    },
+    {
+      "zone": 1,
+      "people": 0,
+      "density": "LOW",
+      "flow": {
+        "LEFT": 0,
+        "RIGHT": 0,
+        "UP": 0,
+        "DOWN": 0,
+        "STATIONARY": 0
+      },
+      "dominant_direction": "LEFT",
+      "trend": "STABLE",
+      "congestion": "LOW",
+      "risk": 0,
+      "risk_level": "SAFE"
+    },
+    {
+      "zone": 2,
+      "people": 0,
+      "density": "LOW",
+      "flow": {
+        "LEFT": 0,
+        "RIGHT": 0,
+        "UP": 0,
+        "DOWN": 0,
+        "STATIONARY": 0
+      },
+      "dominant_direction": "LEFT",
+      "trend": "STABLE",
+      "congestion": "LOW",
+      "risk": 0,
+      "risk_level": "SAFE"
+    },
+    {
+      "zone": 3,
+      "people": 1,
+      "density": "LOW",
+      "flow": {
+        "LEFT": 0,
+        "RIGHT": 0,
+        "UP": 0,
+        "DOWN": 0,
+        "STATIONARY": 1
+      },
+      "dominant_direction": "STATIONARY",
+      "trend": "STABLE",
+      "congestion": "LOW",
+      "risk": 0,
+      "risk_level": "SAFE"
+    }
+  ]
+}
