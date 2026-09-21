@@ -240,8 +240,8 @@ function Dashboard() {
                             {/* Camera Feed Area */}
                             <div className="camera-feed-container" id="camera-feed-box">
                                 <img
-                                    src="/images/cctv_entrance.jpg"
-                                    alt="CCTV Crowd Entrance"
+                                    src="https://suited-resources-anonymous-troy.trycloudflare.com/video_feed"
+                                    alt="Live AI CCTV Crowd Monitoring"
                                     className="camera-feed-image"
                                 />
 
