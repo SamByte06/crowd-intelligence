@@ -36,7 +36,7 @@ function useLiveCrowd() {
         const fetchCrowd = async () => {
             try {
                 const response = await fetch(
-                    "/api/current-crowd"
+                    "https://crowd-intelligence-back.vercel.app"
                 );
 
                 if (!response.ok) {

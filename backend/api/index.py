@@ -26,7 +26,7 @@ def home():
 @app.get("/api/current-crowd")
 def current_crowd():
     return {
-        "people": 0,
+        "people": 9,
         "risk": 0,
         "risk_level": "SAFE",
         "trend": "STABLE"
