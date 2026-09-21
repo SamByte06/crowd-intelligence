@@ -12,13 +12,13 @@ const places = [
         id: "stadium",
         name: "City Stadium",
         location: "Bhopal, Madhya Pradesh",
-        image: "/images/stadium.jpg",
+        image: "/images/holkarstadium.jpg",
     },
     {
         id: "festival",
         name: "Festival Ground",
         location: "Bhopal, Madhya Pradesh",
-        image: "/images/festival.jpg",
+        image: "/images/gwaliorfair.jpg",
     },
 ];
 

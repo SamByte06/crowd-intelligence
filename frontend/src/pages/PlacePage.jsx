@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 const places = {
     mahakaleshwar: {
@@ -15,7 +15,7 @@ const places = {
         location: "Bhopal, Madhya Pradesh",
         description:
             "Real-time crowd monitoring and movement intelligence for large public gatherings.",
-        image: "/images/stadium.jpg",
+        image: "/images/holkarstadium.jpg",
     },
 
     festival: {
@@ -23,7 +23,7 @@ const places = {
         location: "Bhopal, Madhya Pradesh",
         description:
             "Crowd monitoring and early-warning intelligence for festivals and public events.",
-        image: "/images/festival.jpg",
+        image: "/images/gwaliorfair.jpg",
     },
 };
 
@@ -36,7 +36,7 @@ function useLiveCrowd() {
         const fetchCrowd = async () => {
             try {
                 const response = await fetch(
-                    "https://crowd-intelligence-back.vercel.app"
+                    "https://crowd-intelligence-back.vercel.app/api/current-crowd"
                 );
 
                 if (!response.ok) {
