@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="AI Crowd Intelligence API")
+app = FastAPI(
+    title="AI Crowd Intelligence API"
+)
 
 app.add_middleware(
     CORSMiddleware,
