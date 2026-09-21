@@ -14,11 +14,6 @@ app.add_middleware(
 )
 
 
-@app.get("/")
-def root():
-    return {
-        "message": "AI Crowd Intelligence API is running"
-    }
 
 
 @app.get("/api")
