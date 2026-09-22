@@ -1,10 +1,10 @@
 {
-  "timestamp": "21-09-2026 22:52:46",
+  "timestamp": "22-09-2026 09:06:22",
   "event_id": "testing_phase",
   "camera_name": "Camera 01 - Main Entrance",
   "camera_source": "Laptop Webcam",
   "camera_status": "LIVE",
-  "total_people": 3,
+  "total_people": 1,
   "overall_risk": 0,
   "overall_risk_level": "SAFE",
   "highest_risk_zone": 0,
@@ -48,16 +48,16 @@
     },
     {
       "zone": 2,
-      "people": 2,
+      "people": 0,
       "density": "LOW",
       "flow": {
         "LEFT": 0,
         "RIGHT": 0,
         "UP": 0,
         "DOWN": 0,
-        "STATIONARY": 2
+        "STATIONARY": 0
       },
-      "dominant_direction": "STATIONARY",
+      "dominant_direction": "LEFT",
       "trend": "STABLE",
       "congestion": "LOW",
       "risk": 0,

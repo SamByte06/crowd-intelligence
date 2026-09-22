@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import Home from "./pages/Home";
 import PlacePage from "./pages/PlacePage";
+import EventPage from "./pages/EventPage";
 
 import AdminLayout from "./pages/admin/AdminLayout";
 import Dashboard from "./pages/admin/Dashboard";
@@ -14,6 +15,7 @@ function App() {
                 {/* Public Website */}
                 <Route path="/" element={<Home />} />
                 <Route path="/place/:placeId" element={<PlacePage />} />
+                <Route path="/event/:eventId" element={<EventPage />} />
 
                 {/* Admin Panel (Only 2 Pages: Dashboard and Create Event) */}
                 <Route path="/admin" element={<AdminLayout />}>

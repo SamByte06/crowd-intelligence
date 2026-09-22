@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { fetchEvents, getStoredEvents } from "../services/api";
 
 const places = [
     {
@@ -34,13 +35,12 @@ function HeroSearch() {
         : [];
 
     return (
-        <section className="hero">
-            <div className="hero-content">
+        <section className="hero hero-centered">
+            <div className="hero-content hero-content-centered">
                 <p className="hero-label">AI-POWERED CROWD INTELLIGENCE</p>
 
                 <h1>
                     Understand Crowds.
-                    <br />
                     <span>Before They Become Risky.</span>
                 </h1>
 
@@ -58,71 +58,158 @@ function HeroSearch() {
                     />
 
                     <span>⌕</span>
-                </div>
 
-                {results.length > 0 && (
-                    <div className="search-results">
-                        {results.map((place) => (
-                            <Link
-                                key={place.id}
-                                to={`/place/${place.id}`}
-                                className="search-result"
-                            >
-                                <strong>{place.name}</strong>
-                                <small>{place.location}</small>
-                            </Link>
-                        ))}
-                    </div>
-                )}
+                    {results.length > 0 && (
+                        <div className="search-results">
+                            {results.map((place) => (
+                                <Link
+                                    key={place.id}
+                                    to={`/place/${place.id}`}
+                                    className="search-result"
+                                >
+                                    <strong>{place.name}</strong>
+                                    <small>{place.location} • Stay tuned, Coming Soon</small>
+                                </Link>
+                            ))}
+                        </div>
+                    )}
+                </div>
             </div>
         </section>
     );
 }
 
-function LiveCrowd() {
+function ActiveEvents() {
+    const [events, setEvents] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const loadEvents = async () => {
+            const local = getStoredEvents();
+            if (local && local.length > 0) {
+                setEvents(local);
+                setLoading(false);
+                return;
+            }
+
+            try {
+                const apiRes = await fetchEvents();
+                if (apiRes.events && apiRes.events.length > 0) {
+                    setEvents(apiRes.events);
+                } else {
+                    setEvents([]);
+                }
+            } catch (err) {
+                console.error("Failed to load events:", err);
+                setEvents([]);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        loadEvents();
+    }, []);
+
     return (
-        <section className="section live-crowd">
+        <section className="section" id="events">
             <div className="section-heading">
-                <p className="eyebrow">LIVE INTELLIGENCE</p>
-                <h2>Live Crowd Situation</h2>
+                <p className="eyebrow">REAL-TIME MONITORING</p>
+                <h2>Active Events</h2>
                 <p>
-                    Monitor crowd conditions and understand changing risk in
-                    real time.
+                    Live crowd intelligence and monitoring for registered public
+                    gatherings and events. Click to open full event dashboard.
                 </p>
             </div>
 
-            <div className="stats-grid">
-                <div className="stat-card">
-                    <span>👥</span>
-                    <h3>Real-Time People</h3>
-                    <p>AI-based person detection and tracking</p>
+            {loading ? (
+                <div className="events-loading">
+                    <p>Loading scheduled events...</p>
                 </div>
+            ) : events.length > 0 ? (
+                <div className="events-grid">
+                    {events.map((event, idx) => {
+                        const targetId = event.id || idx;
+                        return (
+                            <Link
+                                key={targetId}
+                                to={`/event/${targetId}`}
+                                className="event-item-card-link"
+                            >
+                                <div className="event-item-card">
+                                    <div className="event-card-header">
+                                        <span className="event-type-badge">
+                                            {event.type || "Special Event"}
+                                        </span>
+                                        <span
+                                            className={`event-status-pill ${String(
+                                                event.status || "Active"
+                                            ).toLowerCase()}`}
+                                        >
+                                            ● {event.status || "Active"}
+                                        </span>
+                                    </div>
 
-                <div className="stat-card">
-                    <span>📊</span>
-                    <h3>Crowd Density</h3>
-                    <p>Zone-wise crowd density analysis</p>
-                </div>
+                                    <h3 className="event-title">{event.name}</h3>
 
-                <div className="stat-card">
-                    <span>↗</span>
-                    <h3>Crowd Movement</h3>
-                    <p>Movement and flow direction analysis</p>
-                </div>
+                                    <p className="event-location">
+                                        📍 {event.location}
+                                    </p>
 
-                <div className="stat-card">
-                    <span>⚠</span>
-                    <h3>Risk Intelligence</h3>
-                    <p>Current risk and early-warning estimation</p>
+                                    <div className="event-meta-grid">
+                                        <div className="event-meta-item">
+                                            <strong>Expected Crowd</strong>
+                                            <span>
+                                                {event.expected_crowd
+                                                    ? `${Number(
+                                                          event.expected_crowd
+                                                      ).toLocaleString()} people`
+                                                    : "Not specified"}
+                                            </span>
+                                        </div>
+
+                                        <div className="event-meta-item">
+                                            <strong>Schedule</strong>
+                                            <span>
+                                                {event.start_date || "Ongoing"}
+                                                {event.start_time
+                                                    ? ` • ${event.start_time}`
+                                                    : ""}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {event.description && (
+                                        <p className="event-desc">
+                                            {event.description}
+                                        </p>
+                                    )}
+
+                                    <div className="event-card-action">
+                                        <span>View Live Intelligence →</span>
+                                    </div>
+                                </div>
+                            </Link>
+                        );
+                    })}
                 </div>
-            </div>
+            ) : (
+                <div className="events-empty-state">
+                    <div className="empty-icon">📅</div>
+                    <h3>No Active Events Currently Scheduled</h3>
+                    <p>
+                        There are currently no active public events registered
+                        in the monitoring system. Events configured through the
+                        admin portal will appear here automatically.
+                    </p>
+                </div>
+            )}
         </section>
     );
 }
 
 function PopularPlaces() {
     return (
-        <section className="section popular-places">
+        <section className="section" id="places">
             <div className="section-heading">
                 <p className="eyebrow">MONITORED LOCATIONS</p>
                 <h2>Popular Places</h2>
@@ -145,39 +232,11 @@ function PopularPlaces() {
                             <p>{place.location}</p>
 
                             <span className="view-place">
-                                View Live Intelligence →
+                                Stay Tuned • Coming Soon →
                             </span>
                         </div>
                     </Link>
                 ))}
-            </div>
-        </section>
-    );
-}
-
-function About() {
-    return (
-        <section className="section about-section">
-            <div className="about-content">
-                <p className="eyebrow">ABOUT THE SYSTEM</p>
-
-                <h2>
-                    From Crowd Observation
-                    <br />
-                    to Crowd Intelligence
-                </h2>
-
-                <p>
-                    The system combines live crowd information with historical
-                    crowd patterns to understand changing conditions, estimate
-                    risk and provide early warnings.
-                </p>
-
-                <p>
-                    It uses computer vision, object tracking, crowd-flow
-                    analysis and temporal intelligence to support safer crowd
-                    management.
-                </p>
             </div>
         </section>
     );
@@ -208,9 +267,8 @@ function Home() {
 
                 <div className="nav-links">
                     <Link to="/">Home</Link>
-                    <a href="#live-crowd">Live Crowd</a>
-                    <a href="#places">Places</a>
-                    <a href="#about">About</a>
+                    <a href="#events">Active Events</a>
+                    <a href="#places">Popular Places</a>
 
                     <Link to="/admin" className="nav-link-button">
                         Admin
@@ -220,18 +278,8 @@ function Home() {
 
             <main>
                 <HeroSearch />
-
-                <div id="live-crowd">
-                    <LiveCrowd />
-                </div>
-
-                <div id="places">
-                    <PopularPlaces />
-                </div>
-
-                <div id="about">
-                    <About />
-                </div>
+                <ActiveEvents />
+                <PopularPlaces />
             </main>
 
             <Footer />
