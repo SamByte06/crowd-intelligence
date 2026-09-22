@@ -44,6 +44,7 @@ def get_events():
 
 @app.post("/api/events")
 def create_event(event: dict):
+
     event_id = event.get(
         "id",
         f"event_{len(events_db) + 1}"
@@ -68,6 +69,7 @@ def create_event(event: dict):
 crowd_state = {
     "timestamp": None,
     "event_id": None,
+
     "camera_name": None,
     "camera_status": "OFFLINE",
 
@@ -156,11 +158,141 @@ def update_crowd_state(state: dict):
 
 
 # ---------------------------------------------------------
+# CAMERA STREAM REGISTRATION
+# ---------------------------------------------------------
+# The AI laptop sends the CURRENT Cloudflare URL here.
+#
+# IMPORTANT:
+# This endpoint is part of the deployed backend code.
+# We deploy it ONCE.
+#
+# After that, changing Cloudflare URLs only changes DATA.
+# It does NOT require another Git push.
+# ---------------------------------------------------------
+
+camera_streams = {}
+
+
+@app.post("/api/camera-stream")
+def register_camera_stream(data: dict):
+
+    event_id = data.get("event_id")
+
+    if not event_id:
+        return {
+            "success": False,
+            "message": "event_id is required"
+        }
+
+    video_url = data.get("video_url")
+
+    if not video_url:
+        return {
+            "success": False,
+            "message": "video_url is required"
+        }
+
+    camera_streams[event_id] = {
+        "event_id": event_id,
+
+        "video_url": video_url,
+
+        "camera_name": data.get(
+            "camera_name",
+            "Camera 01 - Main Entrance"
+        ),
+
+        "status": data.get(
+            "status",
+            "LIVE"
+        ),
+
+        "updated_at": datetime.now().isoformat()
+    }
+
+    return {
+        "success": True,
+        "message": "Camera stream registered",
+        "stream": camera_streams[event_id]
+    }
+
+
+@app.get("/api/camera-stream")
+def get_camera_stream(event_id: Optional[str] = None):
+
+    # If a specific event was requested
+    if event_id:
+
+        stream = camera_streams.get(event_id)
+
+        if stream:
+            return {
+                "success": True,
+                "stream": stream
+            }
+
+        return {
+            "success": False,
+            "message": "No camera stream registered for this event",
+            "stream": None
+        }
+
+    # Return latest available stream
+    if camera_streams:
+
+        latest_stream = list(
+            camera_streams.values()
+        )[-1]
+
+        return {
+            "success": True,
+            "stream": latest_stream
+        }
+
+    return {
+        "success": False,
+        "message": "No camera stream registered",
+        "stream": None
+    }
+
+
+@app.post("/api/camera-stream/offline")
+def camera_stream_offline(data: dict):
+
+    event_id = data.get("event_id")
+
+    if not event_id:
+        return {
+            "success": False,
+            "message": "event_id is required"
+        }
+
+    if event_id in camera_streams:
+
+        camera_streams[event_id]["status"] = "OFFLINE"
+
+        camera_streams[event_id][
+            "updated_at"
+        ] = datetime.now().isoformat()
+
+    return {
+        "success": True,
+        "message": "Camera marked offline"
+    }
+
+
+# ---------------------------------------------------------
 # SYSTEM STATUS
 # ---------------------------------------------------------
 
 @app.get("/api/system-status")
 def system_status():
+
+    live_cameras = sum(
+        1
+        for stream in camera_streams.values()
+        if stream.get("status") == "LIVE"
+    )
 
     return {
         "backend": "CONNECTED",
@@ -171,11 +303,7 @@ def system_status():
             else "STOPPED"
         ),
 
-        "cameras": (
-            1
-            if crowd_state["camera_status"] == "LIVE"
-            else 0
-        ),
+        "cameras": live_cameras,
 
         "active_events": len(events_db),
 
