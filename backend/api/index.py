@@ -62,6 +62,18 @@ def create_event(event: dict):
     }
 
 
+@app.delete("/api/events")
+def reset_all_events():
+    global events_db
+    events_db = []
+    return {
+        "success": True,
+        "message": "All events successfully reset and deleted",
+        "events": [],
+        "count": 0
+    }
+
+
 # ---------------------------------------------------------
 # LIVE CROWD STATE
 # ---------------------------------------------------------
@@ -76,13 +88,72 @@ crowd_state = {
     "total_people": 0,
 
     "overall_risk": 0,
-    "overall_risk_level": "LOW",
+    "overall_risk_level": "SAFE",
 
     "highest_risk_zone": None,
     "highest_risk_score": 0,
-    "highest_risk_level": "LOW",
+    "highest_risk_level": "SAFE",
 
     "alert": None,
+
+    "spatial": {
+        "floor_detected": False,
+        "floor_locked": False,
+        "floor_area_m2": 0.0,
+        "obstacle_area_m2": 0.0,
+        "usable_area_m2": 0.0,
+        "floor_detection_confidence": 0.0,
+        "obstacle_detection_confidence": 0.0,
+        "spatial_confidence": "LEARNING",
+        "is_metric_calibrated": False,
+        "scale_mode": "auto_estimated",
+        "detected_obstacles_count": 0,
+    },
+
+    "crowd": {
+        "total_people": 0,
+        "density": 0.0,
+        "density_pm2": 0.0,
+        "occupancy_percent": 0.0,
+        "trend": "STABLE",
+        "growth_rate": 0.0,
+        "spatial_pressure": "NORMAL",
+    },
+
+    "flow": {
+        "dominant_direction": "STATIONARY",
+        "net_flow": 0,
+    },
+
+    "temporal": {
+        "trend": "STABLE",
+        "growth_rate": 0.0,
+        "growth_rate_per_min": 0.0,
+        "spatial_pressure": "NORMAL",
+    },
+
+    "forecast": {
+        "projected_people_5min": 0,
+        "rush_forecast": "LOW",
+        "rush_score": 0.0,
+        "label": "Prototype Forecast",
+    },
+
+    "risk": {
+        "score": 0,
+        "level": "SAFE",
+    },
+
+    "total_area_m2": 0.0,
+    "floor_area_m2": 0.0,
+    "obstacle_area_m2": 0.0,
+    "usable_area_m2": 0.0,
+    "capacity": 0,
+    "occupancy_percent": 0.0,
+    "people_per_m2": 0.0,
+
+    "gender_summary": None,
+    "age_summary": None,
 
     "zones": []
 }
@@ -98,57 +169,13 @@ def update_crowd_state(state: dict):
 
     global crowd_state
 
-    crowd_state = {
-        "timestamp": state.get(
-            "timestamp",
-            datetime.now().isoformat()
-        ),
+    # Merge state cleanly while preserving existing keys and adding all new intelligence attributes
+    updated = dict(crowd_state)
+    updated.update(state)
+    updated["timestamp"] = state.get("timestamp", datetime.now().isoformat())
+    updated["camera_status"] = state.get("camera_status", "LIVE")
 
-        "event_id": state.get("event_id"),
-
-        "camera_name": state.get("camera_name"),
-
-        "camera_status": state.get(
-            "camera_status",
-            "LIVE"
-        ),
-
-        "total_people": state.get(
-            "total_people",
-            0
-        ),
-
-        "overall_risk": state.get(
-            "overall_risk",
-            0
-        ),
-
-        "overall_risk_level": state.get(
-            "overall_risk_level",
-            "LOW"
-        ),
-
-        "highest_risk_zone": state.get(
-            "highest_risk_zone"
-        ),
-
-        "highest_risk_score": state.get(
-            "highest_risk_score",
-            0
-        ),
-
-        "highest_risk_level": state.get(
-            "highest_risk_level",
-            "LOW"
-        ),
-
-        "alert": state.get("alert"),
-
-        "zones": state.get(
-            "zones",
-            []
-        )
-    }
+    crowd_state = updated
 
     return {
         "success": True,

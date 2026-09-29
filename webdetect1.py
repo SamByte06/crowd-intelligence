@@ -1,519 +1,2008 @@
+import argparse
+import csv
+import json
+import math
+import os
+import threading
+import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 import cv2
 import numpy as np
-import time
-import threading
 from ultralytics import YOLO
 
-CAMERA_INDEX = 0
-MODEL_PATH = "yolo11s.pt"
 
-CONFIDENCE = 0.28
-IMAGE_SIZE = 640
-DEVICE = 0
+# ---------------- settings ----------------
 
-# ── Classification Thresholds ──
-REAL_THRESHOLD_HIGH = 0.50   # Threshold to become REAL
-REAL_THRESHOLD_LOW  = 0.42   # Threshold to drop to FILTERED (Hysteresis)
-MIN_BBOX_AREA_RATIO = 0.005  # Minimum relative area in frame
+parser = argparse.ArgumentParser()
+parser.add_argument("--event-id", default="event_1")
+parser.add_argument("--camera", type=int, default=0)
+parser.add_argument("--calibrate", action="store_true")
+parser.add_argument("--setup-obstacles", action="store_true")
+parser.add_argument("--clear-calibration", action="store_true")
+parser.add_argument("--clear-obstacles", action="store_true")
+args = parser.parse_args()
 
-# COCO class IDs
-PERSON_CLASS = 0
-SCREEN_CLASSES = {62, 63, 67}       # tv, laptop, cell phone
-DETECT_CLASSES = [0, 62, 63, 67]   # detect persons + screen devices
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+MODEL_PATH = os.path.join(ROOT, "yolo11s.pt")
+CALIBRATION_FILE = os.path.join(ROOT, "spatial_calibration.json")
+OBSTACLE_FILE = os.path.join(ROOT, "obstacles.json")
+STATE_FILE = os.path.join(ROOT, "crowd_state.json")
+ALERT_FILE = os.path.join(ROOT, "alert_history.csv")
+
+EVENT_ID = args.event_id
+CAMERA_INDEX = args.camera
+CAMERA_NAME = "Camera 01 - Main Entrance"
+
+# Change this only if your local FastAPI server uses another port.
+BACKEND_URL = os.getenv("CROWD_BACKEND_URL", "http://127.0.0.1:8001")
+
+STREAM_PORT = 8000
+
+MODEL_CONFIDENCE = 0.30
+IMAGE_SIZE = 416
+INFERENCE_EVERY = 2
+
+GRID_ROWS = 2
+GRID_COLS = 2
+
+PEOPLE_PER_M2 = 2.0
+
+MOVEMENT_THRESHOLD = 3
+FLOW_ALPHA = 0.20
+RISK_ALPHA = 0.20
+
+TREND_HISTORY_SIZE = 10
+
+ALERT_CONFIRM_FRAMES = 30
+ALERT_COOLDOWN = 10
+
+STATE_INTERVAL = 1.0
+BACKEND_INTERVAL = 1.0
 
 
-class TrackedPersonState:
-    """Maintains smoothed temporal state for each tracked person."""
-    def __init__(self, track_id, initial_score, initial_reason):
-        self.track_id = track_id
-        self.smoothed_score = initial_score
-        self.is_real = (initial_score >= REAL_THRESHOLD_HIGH)
-        self.primary_reason = initial_reason
-        self.frame_count = 1
+# ---------------- small helpers ----------------
 
-    def update(self, raw_score, reason, is_rigid_motion):
-        self.frame_count += 1
-
-        # Apply motion evidence
-        if is_rigid_motion is True:
-            raw_score = min(raw_score, 0.20)
-            reason = "RIGID_2D_PHOTO"
-        elif is_rigid_motion is False:
-            raw_score = min(1.0, max(raw_score, 0.85))
-
-        # Temporal EMA smoothing
-        alpha = 0.35 if self.frame_count < 8 else 0.20
-        self.smoothed_score = (1.0 - alpha) * self.smoothed_score + alpha * raw_score
-
-        # Hysteresis switching
-        if self.is_real:
-            if self.smoothed_score < REAL_THRESHOLD_LOW:
-                self.is_real = False
-        else:
-            if self.smoothed_score >= REAL_THRESHOLD_HIGH:
-                self.is_real = True
-
-        self.primary_reason = reason
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return default
 
 
-class RealPersonFilter:
-    """
-    Advanced Multi-Signal Real Person vs Screen/Photo Filter.
-    
-    1. YOLO Screen Device Overlap Check (Direct Phone / Screen detection)
-    2. Spatial Nesting Check (Phone person held inside real person body)
-    3. Bezel & Dark Casing Edge Detection
-    4. Glass Specular Glare & Backlight Check
-    5. Screen Portrait Aspect Ratio Check (h:w ~ 1.7 to 2.5)
-    6. Optical Flow 2D Planar Rigidity Analysis (Rigid photo vs 3D human)
-    7. Track-based Hysteresis State Machine (Zero fumbling)
-    """
+def save_json_safe(path, data):
+    """Write state without stopping the AI if Windows temporarily locks the file."""
+    temp_path = path + ".tmp"
 
-    def __init__(self):
-        self.frame_area = 1
-        self.frame_h = 1
-        self.frame_w = 1
-        self.track_states = {}
-        self.prev_frame_gray = None
+    try:
+        with open(temp_path, "w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2)
 
-    def update_frame(self, frame):
-        self.frame_h, self.frame_w = frame.shape[:2]
-        self.frame_area = max(1, self.frame_h * self.frame_w)
-
-    def _clamp_crop(self, frame, x1, y1, x2, y2):
-        h, w = frame.shape[:2]
-        x1, y1 = max(0, int(x1)), max(0, int(y1))
-        x2, y2 = min(w, int(x2)), min(h, int(y2))
-        if x2 <= x1 or y2 <= y1:
-            return None
-        crop = frame[y1:y2, x1:x2]
-        return crop if crop.size > 0 else None
-
-    # ── Screen Device Overlap Check ──
-    def _check_screen_overlap(self, box, screen_boxes):
-        if len(screen_boxes) == 0:
-            return False, 1.0
-
-        x1, y1, x2, y2 = box
-        p_area = max(1, (x2 - x1) * (y2 - y1))
-
-        for sbox in screen_boxes:
-            sx1, sy1, sx2, sy2 = sbox
-            s_area = max(1, (sx2 - sx1) * (sy2 - sy1))
-            
-            # Pad screen box slightly
-            pw = (sx2 - sx1) * 0.12
-            ph = (sy2 - sy1) * 0.12
-            esx1, esy1 = sx1 - pw, sy1 - ph
-            esx2, esy2 = sx2 + pw, sy2 + ph
-
-            ix1, iy1 = max(x1, esx1), max(y1, esy1)
-            ix2, iy2 = min(x2, esx2), min(y2, esy2)
-
-            if ix1 < ix2 and iy1 < iy2:
-                inter = (ix2 - ix1) * (iy2 - iy1)
-                overlap_person = inter / p_area
-                # Person is on a screen if mostly inside screen, AND person area is not massive compared to screen
-                if overlap_person > 0.40 and p_area < (s_area * 1.6):
-                    return True, 0.05
-
-        return False, 1.0
-
-    # ── Nesting Check ──
-    def _check_nesting(self, box, all_boxes, idx):
-        x1, y1, x2, y2 = box
-        box_area = (x2 - x1) * (y2 - y1)
-        if box_area <= 0:
+        try:
+            os.replace(temp_path, path)
+        except PermissionError:
+            # Another process may have the JSON open.
+            # Keep the AI running and try again on the next interval.
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
             return False
 
-        for i, other in enumerate(all_boxes):
-            if i == idx:
-                continue
-            ox1, oy1, ox2, oy2 = other
-            other_area = (ox2 - ox1) * (oy2 - oy1)
-            ix1, iy1 = max(x1, ox1), max(y1, oy1)
-            ix2, iy2 = min(x2, ox2), min(y2, oy2)
-            if ix1 < ix2 and iy1 < iy2:
-                inter_area = (ix2 - ix1) * (iy2 - iy1)
-                overlap = inter_area / box_area
-                if overlap > 0.50 and other_area > (box_area * 1.5):
-                    return True
+        return True
+
+    except OSError:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
         return False
 
-    # ── Bezel & Phone Border Check ──
-    def _score_bezel(self, frame, box, area_ratio):
-        # A large primary person taking >35% frame is real human body, not a bezel
-        if area_ratio > 0.35:
-            return 0.90
 
-        h, w = frame.shape[:2]
-        x1, y1, x2, y2 = [int(v) for v in box]
-        bw, bh = x2 - x1, y2 - y1
-        if bw < 14 or bh < 14:
-            return 0.50
+def polygon_area(points):
+    points = np.asarray(points, dtype=np.float32)
 
-        pad_x = max(3, int(bw * 0.08))
-        pad_y = max(3, int(bh * 0.08))
+    if len(points) < 3:
+        return 0.0
 
-        ex1, ey1 = max(0, x1 - pad_x), max(0, y1 - pad_y)
-        ex2, ey2 = min(w, x2 + pad_x), min(h, y2 + pad_y)
+    return abs(float(cv2.contourArea(points)))
 
-        roi = frame[ey1:ey2, ex1:ex2]
-        if roi.size == 0:
-            return 0.50
 
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        rw, rh = roi.shape[1], roi.shape[0]
+def intersect_polygons(first, second):
+    """Intersection for convex polygons."""
+    first = np.asarray(first, dtype=np.float32)
+    second = np.asarray(second, dtype=np.float32)
 
-        left_strip = gray[:, :max(2, int(rw * 0.08))]
-        right_strip = gray[:, -max(2, int(rw * 0.08)):]
-        top_strip = gray[:max(2, int(rh * 0.08)), :]
-
-        dark_count = 0
-        if np.mean(left_strip) < 65 or np.std(left_strip) < 25:
-            dark_count += 1
-        if np.mean(right_strip) < 65 or np.std(right_strip) < 25:
-            dark_count += 1
-        if np.mean(top_strip) < 65 or np.std(top_strip) < 25:
-            dark_count += 1
-
-        if dark_count >= 2:
-            return 0.15
-        elif dark_count == 1:
-            return 0.40
-        return 0.85
-
-    # ── Glare & Aspect Ratio Check ──
-    def _score_glare_and_ar(self, crop, box, area_ratio):
-        h, w = crop.shape[:2]
-        x1, y1, x2, y2 = box
-        bw, bh = max(1, x2 - x1), max(1, y2 - y1)
-        ratio = bh / bw
-
-        is_phone_aspect = (1.60 <= ratio <= 2.60) and (area_ratio < 0.40)
-
-        glare_mask = (crop[:, :, 0] > 220) & (crop[:, :, 1] > 220) & (crop[:, :, 2] > 220)
-        glare_ratio = np.count_nonzero(glare_mask) / max(1, h * w)
- 
-        if is_phone_aspect and glare_ratio > 0.010:
-            return 0.15, "PHONE_SCREEN"
-        elif is_phone_aspect:
-            return 0.35, "PHONE_ASPECT"
-        elif glare_ratio > 0.025:
-            return 0.30, "SCREEN_GLARE"
-        return 0.85, "OK"
-
-    # ── Optical Flow Rigidity ──
-    def _analyze_rigidity(self, frame_gray, prev_gray, box):
-        if prev_gray is None:
-            return None
-
-        x1, y1, x2, y2 = [int(v) for v in box]
-        bw, bh = x2 - x1, y2 - y1
-        if bw < 25 or bh < 25:
-            return None
-
-        crop_prev = prev_gray[y1:y2, x1:x2]
-        crop_curr = frame_gray[y1:y2, x1:x2]
-        if crop_prev.size == 0 or crop_curr.size == 0:
-            return None
-
-        pts = cv2.goodFeaturesToTrack(crop_prev, maxCorners=30, qualityLevel=0.03, minDistance=6)
-        if pts is None or len(pts) < 6:
-            return None
-
-        pts_next, status, _ = cv2.calcOpticalFlowPyrLK(crop_prev, crop_curr, pts, None)
-        if pts_next is None or status is None:
-            return None
-
-        valid = status.ravel() == 1
-        pts_valid_prev = pts[valid].reshape(-1, 2)
-        pts_valid_curr = pts_next[valid].reshape(-1, 2)
-
-        if len(pts_valid_prev) < 6:
-            return None
-
-        motion_vectors = pts_valid_curr - pts_valid_prev
-        mean_motion = np.mean(np.linalg.norm(motion_vectors, axis=1))
-
-        if mean_motion > 0.7:
-            affine, _ = cv2.estimateAffinePartial2D(pts_valid_prev, pts_valid_curr)
-            if affine is not None:
-                pts_trans = cv2.transform(pts_valid_prev.reshape(-1, 1, 2), affine).reshape(-1, 2)
-                residual = float(np.mean(np.linalg.norm(pts_valid_curr - pts_trans, axis=1)))
-                if residual < 0.18:
-                    return True   # Rigid 2D motion (Phone / Photo)
-                elif residual > 0.60:
-                    return False  # Non-rigid 3D motion (Real Human)
-
+    if len(first) < 3 or len(second) < 3:
         return None
 
-    # ── Main Filter Evaluation ──
-    def evaluate_person(self, frame, frame_gray, box, track_id, conf,
-                        all_person_boxes, idx, screen_boxes):
-        x1, y1, x2, y2 = box
-        bw, bh = x2 - x1, y2 - y1
-        area_ratio = (bw * bh) / self.frame_area
+    try:
+        area, result = cv2.intersectConvexConvex(first, second)
 
-        # 1. Minimum area check
-        if area_ratio < MIN_BBOX_AREA_RATIO:
-            return 0.0, "TOO_SMALL", False
+        if result is None or area <= 0:
+            return None
 
-        # 2. YOLO Screen Device Overlap
-        is_on_screen, s_overlap = self._check_screen_overlap(box, screen_boxes)
-        if is_on_screen:
-            raw_score = 0.05
-            reason = "ON_SCREEN"
-        # 3. Nesting inside another person
-        elif self._check_nesting(box, all_person_boxes, idx):
-            raw_score = 0.05
-            reason = "NESTED"
-        else:
-            crop = self._clamp_crop(frame, x1, y1, x2, y2)
-            if crop is None:
-                return 0.0, "NO_CROP", False
+        return result.reshape(-1, 2)
 
-            s_bezel = self._score_bezel(frame, box, area_ratio)
-            s_glare_ar, glare_reason = self._score_glare_and_ar(crop, box, area_ratio)
-
-            # Weight signals
-            if area_ratio > 0.30:
-                # Primary large person in frame
-                raw_score = 0.90
-                reason = "REAL"
-            elif s_bezel < 0.20 or s_glare_ar < 0.20:
-                raw_score = min(s_bezel, s_glare_ar)
-                reason = glare_reason if s_glare_ar < 0.20 else "PHONE_BEZEL"
-            else:
-                raw_score = 0.50 * s_bezel + 0.35 * s_glare_ar + 0.15 * (1.0 if conf > 0.65 else 0.70)
-                reason = "OK"
-
-        # Optical Flow Rigidity
-        is_rigid = self._analyze_rigidity(frame_gray, self.prev_frame_gray, box)
-
-        # Track State Update
-        if track_id not in self.track_states:
-            self.track_states[track_id] = TrackedPersonState(track_id, raw_score, reason)
-        tstate = self.track_states[track_id]
-        tstate.update(raw_score, reason, is_rigid)
-
-        return tstate.smoothed_score, tstate.primary_reason, tstate.is_real
-
-    def post_frame_update(self, frame_gray, active_track_ids):
-        self.prev_frame_gray = frame_gray.copy()
-        stale_ids = [tid for tid in self.track_states if tid not in active_track_ids]
-        for tid in stale_ids:
-            if self.track_states[tid].frame_count > 60:
-                del self.track_states[tid]
+    except cv2.error:
+        return None
 
 
-# ── Camera stream (threaded) ──
-class CameraStream:
-    def __init__(self, camera_index):
-        self.cap = cv2.VideoCapture(camera_index)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self.lock = threading.Lock()
+# ---------------- calibration ----------------
+
+calibration = load_json(CALIBRATION_FILE, None)
+obstacles = load_json(OBSTACLE_FILE, [])
+
+if args.clear_calibration:
+    try:
+        os.remove(CALIBRATION_FILE)
+    except FileNotFoundError:
+        pass
+
+    print("Calibration removed.")
+    raise SystemExit
+
+
+if args.clear_obstacles:
+    try:
+        os.remove(OBSTACLE_FILE)
+    except FileNotFoundError:
+        pass
+
+    print("Obstacles removed.")
+    raise SystemExit
+
+
+def get_calibration_points():
+    if calibration is None:
+        return None
+
+    points = calibration.get("image_points")
+
+    if not points or len(points) != 4:
+        return None
+
+    return np.asarray(points, dtype=np.float32)
+
+
+def get_homography():
+    if calibration is None:
+        return None
+
+    # Newer calibration files already contain this.
+    if "homography" in calibration:
+        return np.asarray(
+            calibration["homography"],
+            dtype=np.float32
+        )
+
+    # Older calibration files can be upgraded automatically.
+    image_points = get_calibration_points()
+
+    if image_points is None:
+        return None
+
+    width = float(calibration.get("real_width_m", 0))
+    height = float(calibration.get("real_height_m", 0))
+
+    if width <= 0 or height <= 0:
+        return None
+
+    real_points = np.asarray(
+        [
+            [0, 0],
+            [width, 0],
+            [width, height],
+            [0, height],
+        ],
+        dtype=np.float32
+    )
+
+    return cv2.getPerspectiveTransform(
+        image_points,
+        real_points
+    )
+
+
+def project_to_ground(points):
+    homography = get_homography()
+
+    if homography is None:
+        return None
+
+    points = np.asarray(points, dtype=np.float32)
+
+    if len(points) < 1:
+        return None
+
+    return cv2.perspectiveTransform(
+        points.reshape(-1, 1, 2),
+        homography
+    ).reshape(-1, 2)
+
+
+def get_zone_polygon(zone, width, height):
+    zone_width = width / GRID_COLS
+    zone_height = height / GRID_ROWS
+
+    col = zone % GRID_COLS
+    row = zone // GRID_COLS
+
+    x1 = col * zone_width
+    y1 = row * zone_height
+    x2 = (col + 1) * zone_width
+    y2 = (row + 1) * zone_height
+
+    return np.asarray(
+        [
+            [x1, y1],
+            [x2, y1],
+            [x2, y2],
+            [x1, y2],
+        ],
+        dtype=np.float32
+    )
+
+
+def get_calibrated_zone(zone, width, height):
+    floor = get_calibration_points()
+
+    if floor is None:
+        return None
+
+    return intersect_polygons(
+        get_zone_polygon(zone, width, height),
+        floor
+    )
+
+
+def get_zone_area(zone, width, height):
+    image_zone = get_calibrated_zone(
+        zone,
+        width,
+        height
+    )
+
+    if image_zone is None:
+        return 0.0
+
+    ground_zone = project_to_ground(image_zone)
+
+    if ground_zone is None:
+        return 0.0
+
+    return polygon_area(ground_zone)
+
+
+def get_obstacle_area(zone, width, height):
+    image_zone = get_calibrated_zone(
+        zone,
+        width,
+        height
+    )
+
+    floor = get_calibration_points()
+
+    if image_zone is None or floor is None:
+        return 0.0
+
+    total = 0.0
+
+    for obstacle in obstacles:
+        points = np.asarray(
+            obstacle.get("points", []),
+            dtype=np.float32
+        )
+
+        clipped_to_floor = intersect_polygons(
+            points,
+            floor
+        )
+
+        if clipped_to_floor is None:
+            continue
+
+        clipped_to_zone = intersect_polygons(
+            clipped_to_floor,
+            image_zone
+        )
+
+        if clipped_to_zone is None:
+            continue
+
+        ground = project_to_ground(clipped_to_zone)
+
+        if ground is not None:
+            total += polygon_area(ground)
+
+    return total
+
+
+def calibrate_floor():
+    camera = cv2.VideoCapture(
+        CAMERA_INDEX,
+        cv2.CAP_DSHOW
+    )
+
+    if not camera.isOpened():
+        raise RuntimeError("Camera could not be opened.")
+
+    points = []
+
+    def mouse_callback(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN and len(points) < 4:
+            points.append([x, y])
+
+    cv2.namedWindow("Floor Calibration")
+    cv2.setMouseCallback(
+        "Floor Calibration",
+        mouse_callback
+    )
+
+    print()
+    print("Floor calibration")
+    print("Click: top-left, top-right, bottom-right, bottom-left")
+    print("ENTER = save")
+    print("R = reset")
+    print("ESC = cancel")
+
+    while True:
+        ok, frame = camera.read()
+
+        if not ok:
+            continue
+
+        view = frame.copy()
+
+        for index, point in enumerate(points):
+            point = tuple(map(int, point))
+
+            cv2.circle(
+                view,
+                point,
+                7,
+                (0, 255, 255),
+                -1
+            )
+
+            cv2.putText(
+                view,
+                str(index + 1),
+                point,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 255),
+                2
+            )
+
+        if len(points) >= 2:
+            cv2.polylines(
+                view,
+                [np.asarray(points, dtype=np.int32)],
+                False,
+                (0, 255, 255),
+                2
+            )
+
+        cv2.putText(
+            view,
+            "Click 4 floor corners | ENTER save | R reset | ESC cancel",
+            (20, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 255),
+            2
+        )
+
+        cv2.imshow(
+            "Floor Calibration",
+            view
+        )
+
+        key = cv2.waitKey(1) & 255
+
+        if key == 27:
+            break
+
+        if key in (ord("r"), ord("R")):
+            points.clear()
+
+        if key == 13 and len(points) == 4:
+            break
+
+    camera.release()
+    cv2.destroyWindow("Floor Calibration")
+
+    if len(points) != 4:
+        raise SystemExit("Calibration cancelled.")
+
+    try:
+        width = float(input("Real floor width (metres): "))
+        height = float(input("Real floor height (metres): "))
+    except ValueError:
+        raise SystemExit("Invalid dimensions.")
+
+    if width <= 0 or height <= 0:
+        raise SystemExit("Dimensions must be greater than zero.")
+
+    image_points = np.asarray(
+        points,
+        dtype=np.float32
+    )
+
+    real_points = np.asarray(
+        [
+            [0, 0],
+            [width, 0],
+            [width, height],
+            [0, height],
+        ],
+        dtype=np.float32
+    )
+
+    homography = cv2.getPerspectiveTransform(
+        image_points,
+        real_points
+    )
+
+    save_json_safe(
+        CALIBRATION_FILE,
+        {
+            "image_points": points,
+            "real_width_m": width,
+            "real_height_m": height,
+            "homography": homography.tolist(),
+        }
+    )
+
+    print(
+        f"Saved floor: {width}m x {height}m "
+        f"= {width * height:.2f}m2"
+    )
+
+
+if args.calibrate:
+    calibrate_floor()
+    raise SystemExit
+
+
+def setup_obstacles():
+    if calibration is None:
+        raise SystemExit(
+            "Calibrate the floor before adding obstacles."
+        )
+
+    camera = cv2.VideoCapture(
+        CAMERA_INDEX,
+        cv2.CAP_DSHOW
+    )
+
+    if not camera.isOpened():
+        raise RuntimeError("Camera could not be opened.")
+
+    ok, frame = camera.read()
+    camera.release()
+
+    if not ok:
+        raise RuntimeError("Could not read camera.")
+
+    current = []
+    saved = []
+
+    window = "Obstacle Setup"
+
+    def mouse_callback(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN and len(current) < 4:
+            current.append([x, y])
+
+    cv2.namedWindow(window)
+    cv2.setMouseCallback(
+        window,
+        mouse_callback
+    )
+
+    print()
+    print("Obstacle setup")
+    print("Click 4 corners of an obstacle.")
+    print("ENTER = add obstacle")
+    print("S = save")
+    print("R = reset current")
+    print("ESC = cancel")
+
+    while True:
+        view = frame.copy()
+
+        floor = get_calibration_points()
+
+        if floor is not None:
+            cv2.polylines(
+                view,
+                [floor.astype(np.int32)],
+                True,
+                (0, 165, 255),
+                3
+            )
+
+        for obstacle in saved:
+            cv2.polylines(
+                view,
+                [np.asarray(obstacle["points"], dtype=np.int32)],
+                True,
+                (255, 0, 255),
+                2
+            )
+
+        if len(current) >= 2:
+            cv2.polylines(
+                view,
+                [np.asarray(current, dtype=np.int32)],
+                False,
+                (0, 0, 255),
+                3
+            )
+
+        for point in current:
+            cv2.circle(
+                view,
+                tuple(point),
+                6,
+                (0, 0, 255),
+                -1
+            )
+
+        cv2.putText(
+            view,
+            "4 corners | ENTER add | S save | R reset | ESC cancel",
+            (15, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 255),
+            2
+        )
+
+        cv2.imshow(
+            window,
+            view
+        )
+
+        key = cv2.waitKey(30) & 255
+
+        if key == 27:
+            break
+
+        if key in (ord("r"), ord("R")):
+            current.clear()
+
+        elif key == 13 and len(current) == 4:
+            saved.append(
+                {
+                    "name": f"obstacle_{len(saved) + 1}",
+                    "points": current.copy(),
+                }
+            )
+            current.clear()
+
+        elif key in (ord("s"), ord("S")):
+            break
+
+    cv2.destroyWindow(window)
+
+    save_json_safe(
+        OBSTACLE_FILE,
+        saved
+    )
+
+    print(f"Saved {len(saved)} obstacles.")
+
+
+if args.setup_obstacles:
+    setup_obstacles()
+    raise SystemExit
+
+
+# ---------------- camera stream ----------------
+
+latest_jpeg = None
+jpeg_lock = threading.Lock()
+
+
+class StreamHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        if self.path == "/":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(
+                b"AI Crowd Intelligence stream is running. "
+                b"Open /video_feed."
+            )
+            return
+
+        if self.path != "/video_feed":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        self.send_response(200)
+
+        self.send_header(
+            "Content-Type",
+            "multipart/x-mixed-replace; boundary=frame"
+        )
+
+        self.send_header(
+            "Cache-Control",
+            "no-cache, no-store, must-revalidate"
+        )
+
+        self.send_header(
+            "Pragma",
+            "no-cache"
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*"
+        )
+
+        self.end_headers()
+
+        try:
+            while True:
+                with jpeg_lock:
+                    image = latest_jpeg
+
+                if image is not None:
+                    self.wfile.write(
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n"
+                        + image
+                        + b"\r\n"
+                    )
+
+                time.sleep(0.03)
+
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def log_message(self, format, *args):
+        return
+
+
+video_server = ThreadingHTTPServer(
+    ("0.0.0.0", STREAM_PORT),
+    StreamHandler
+)
+
+threading.Thread(
+    target=video_server.serve_forever,
+    daemon=True
+).start()
+
+
+# ---------------- camera capture thread ----------------
+
+class CameraCapture:
+
+    def __init__(self, source):
+        self.source = source
+        self.capture = None
         self.frame = None
+        self.lock = threading.Lock()
+        self.running = False
+
+    def start(self):
+        self.capture = cv2.VideoCapture(
+            self.source,
+            cv2.CAP_DSHOW
+        )
+
+        if not self.capture.isOpened():
+            raise RuntimeError(
+                "Could not open webcam."
+            )
+
+        self.capture.set(
+            cv2.CAP_PROP_FRAME_WIDTH,
+            640
+        )
+
+        self.capture.set(
+            cv2.CAP_PROP_FRAME_HEIGHT,
+            480
+        )
+
+        self.capture.set(
+            cv2.CAP_PROP_BUFFERSIZE,
+            1
+        )
+
         self.running = True
 
-        self.thread = threading.Thread(
-            target=self.update,
+        threading.Thread(
+            target=self._read_loop,
             daemon=True
-        )
-        self.thread.start()
+        ).start()
 
-    def update(self):
+        return self
+
+    def _read_loop(self):
         while self.running:
-            success, frame = self.cap.read()
-            if success:
-                with self.lock:
-                    self.frame = frame
-            else:
+            ok, frame = self.capture.read()
+
+            if not ok:
                 time.sleep(0.01)
+                continue
+
+            with self.lock:
+                self.frame = frame
 
     def read(self):
         with self.lock:
             if self.frame is None:
-                return False, None
-            return True, self.frame.copy()
+                return None
+
+            return self.frame.copy()
 
     def stop(self):
         self.running = False
-        if self.thread.is_alive():
-            self.thread.join(timeout=1)
-        self.cap.release()
+
+        if self.capture is not None:
+            self.capture.release()
 
 
-# ── Initialization ──
-camera = CameraStream(CAMERA_INDEX)
+camera = CameraCapture(
+    CAMERA_INDEX
+).start()
 
-print("Loading YOLO11s...")
+
+# ---------------- backend uploader ----------------
+
+class BackendUploader:
+
+    def __init__(self, url):
+        self.url = url
+        self.latest_state = None
+        self.lock = threading.Lock()
+        self.running = True
+        self.connected = False
+
+    def update(self, state):
+        with self.lock:
+            self.latest_state = state
+
+    def start(self):
+        threading.Thread(
+            target=self._loop,
+            daemon=True
+        ).start()
+
+    def _loop(self):
+        while self.running:
+            with self.lock:
+                state = self.latest_state
+
+            if state is not None:
+                self.send(state)
+
+            time.sleep(BACKEND_INTERVAL)
+
+    def send(self, state):
+        try:
+            data = json.dumps(state).encode("utf-8")
+
+            request = urllib.request.Request(
+                self.url + "/api/crowd-state",
+                data=data,
+                headers={
+                    "Content-Type": "application/json"
+                },
+                method="POST"
+            )
+
+            with urllib.request.urlopen(
+                request,
+                timeout=2
+            ):
+                pass
+
+            if not self.connected:
+                print("Backend connection established.")
+
+            self.connected = True
+
+        except Exception:
+            if self.connected:
+                print("Backend connection lost.")
+
+            self.connected = False
+
+    def stop(self):
+        self.running = False
+
+
+backend = BackendUploader(
+    BACKEND_URL
+)
+
+backend.start()
+
+
+# ---------------- tracking ----------------
+
 model = YOLO(MODEL_PATH)
-print("YOLO11s loaded.")
-print("Using GPU Device:", DEVICE)
 
-person_filter = RealPersonFilter()
+tracks = {}
 
-fps_counter = 0
-fps_timer = time.time()
-fps = 0
+zone_history = [
+    []
+    for _ in range(GRID_ROWS * GRID_COLS)
+]
 
-track_history = {}
-MAX_HISTORY = 30
+flow_vectors = [
+    np.zeros(2, dtype=np.float32)
+    for _ in range(GRID_ROWS * GRID_COLS)
+]
 
-COLOR_REAL       = (0, 255, 0)     # Vibrant Green  — Real Person
-COLOR_FILTERED   = (0, 0, 255)     # Bright Red     — Screen / Photo Person
-COLOR_SCREEN_BOX = (255, 230, 0)   # Cyan / Gold    — Screen Device
-COLOR_TEXT_BG    = (20, 20, 20)    # Dark Charcoal
-COLOR_ACCENT     = (0, 210, 255)   # Amber / Orange
+risk_values = [
+    0.0
+    for _ in range(GRID_ROWS * GRID_COLS)
+]
+
+high_risk_frames = 0
+last_alert_time = 0
+
+last_state_save = 0
+
+
+def get_density(count):
+    if count <= 5:
+        return "LOW"
+
+    if count <= 10:
+        return "MEDIUM"
+
+    if count <= 15:
+        return "HIGH"
+
+    return "CRITICAL"
+
+
+def get_flow(vector):
+    x = float(vector[0])
+    y = float(vector[1])
+
+    speed = math.hypot(x, y)
+
+    if speed < 0.8:
+        return "STATIONARY"
+
+    if abs(x) >= abs(y):
+        return "RIGHT" if x > 0 else "LEFT"
+
+    return "DOWN" if y > 0 else "UP"
+
+
+def calculate_risk(
+    people,
+    capacity,
+    occupancy,
+    density,
+    flow_state,
+    trend
+):
+    if people <= 0:
+        return 0.0
+
+    # Occupancy contributes most, but cannot alone force HIGH risk.
+    occupancy_score = min(
+        60.0,
+        occupancy * 0.60
+    )
+
+    density_score = {
+        "LOW": 0.0,
+        "MEDIUM": 8.0,
+        "HIGH": 16.0,
+        "CRITICAL": 25.0,
+    }[density]
+
+    flow_score = {
+        "SMOOTH": 0.0,
+        "UNSTABLE": 8.0,
+        "CONGESTED": 15.0,
+    }[flow_state]
+
+    trend_score = 7.0 if trend == "INCREASING" else 0.0
+
+    score = (
+        occupancy_score
+        + density_score
+        + flow_score
+        + trend_score
+    )
+
+    return min(100.0, score)
+
+
+def risk_level(score):
+    if score <= 25:
+        return "SAFE"
+
+    if score <= 50:
+        return "MODERATE"
+
+    if score <= 75:
+        return "HIGH"
+
+    return "CRITICAL"
+
+
+def draw_text(
+    image,
+    text,
+    position,
+    color=(255, 255, 255),
+    size=0.55,
+    thickness=1
+):
+    cv2.putText(
+        image,
+        text,
+        position,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        size,
+        color,
+        thickness,
+        cv2.LINE_AA
+    )
+
+
+def save_alert(
+    score,
+    level,
+    people,
+    occupancy
+):
+    file_exists = os.path.exists(ALERT_FILE)
+
+    try:
+        with open(
+            ALERT_FILE,
+            "a",
+            newline="",
+            encoding="utf-8"
+        ) as file:
+            writer = csv.writer(file)
+
+            if not file_exists:
+                writer.writerow(
+                    [
+                        "time",
+                        "risk",
+                        "level",
+                        "people",
+                        "occupancy",
+                    ]
+                )
+
+            writer.writerow(
+                [
+                    time.strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                    score,
+                    level,
+                    people,
+                    occupancy,
+                ]
+            )
+
+    except OSError:
+        pass
+
+
+# ---------------- main loop ----------------
+
+WINDOW_NAME = "AI Crowd Intelligence"
+
+cv2.namedWindow(
+    WINDOW_NAME,
+    cv2.WINDOW_NORMAL
+)
+
+cv2.resizeWindow(
+    WINDOW_NAME,
+    1280,
+    720
+)
+
+fullscreen = False
+
+frame_number = 0
+last_result = None
+
+print()
+print("==========================================")
+print(" AI CROWD INTELLIGENCE ENGINE")
+print("==========================================")
+print(f"Event:      {EVENT_ID}")
+print(f"Camera:     {CAMERA_NAME}")
+print(f"Backend:    {BACKEND_URL}")
+print(f"Stream:     http://localhost:{STREAM_PORT}/video_feed")
+
+if calibration is not None:
+    width = calibration.get("real_width_m", 0)
+    height = calibration.get("real_height_m", 0)
+
+    print(
+        f"Floor:      {width}m x {height}m "
+        f"= {width * height:.2f}m2"
+    )
+else:
+    print("Floor:      not calibrated")
+
+print(f"Obstacles:  {len(obstacles)}")
+print("F = fullscreen")
+print("Q / ESC = exit")
+print("==========================================")
+print()
+
+running = True
 
 try:
-    while True:
-        success, frame = camera.read()
-        if not success:
-            time.sleep(0.01)
+    while running:
+
+        frame = camera.read()
+
+        if frame is None:
+            time.sleep(0.005)
             continue
 
-        person_filter.update_frame(frame)
-        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frame_number += 1
 
-        # ── Detect BOTH persons AND screen devices ──
-        results = model.track(
-            frame,
-            persist=True,
-            tracker="bytetrack.yaml",
-            classes=DETECT_CLASSES,
-            conf=CONFIDENCE,
-            imgsz=IMAGE_SIZE,
-            device=DEVICE,
-            verbose=False
+        height, width = frame.shape[:2]
+
+        # Run YOLO every second frame.
+        # ByteTrack keeps track IDs between inference frames.
+        if (
+            last_result is None
+            or frame_number % INFERENCE_EVERY == 0
+        ):
+            last_result = model.track(
+                frame,
+                persist=True,
+                classes=[0],
+                conf=MODEL_CONFIDENCE,
+                imgsz=IMAGE_SIZE,
+                tracker="bytetrack.yaml",
+                device=0,
+                verbose=False
+            )[0]
+
+        result = last_result
+
+        zone_counts = [
+            0
+            for _ in range(GRID_ROWS * GRID_COLS)
+        ]
+
+        zone_speeds = [
+            []
+            for _ in range(GRID_ROWS * GRID_COLS)
+        ]
+
+        people_data = []
+
+        if (
+            result is not None
+            and result.boxes is not None
+            and result.boxes.id is not None
+        ):
+            boxes = (
+                result.boxes.xyxy
+                .cpu()
+                .numpy()
+            )
+
+            ids = (
+                result.boxes.id
+                .cpu()
+                .numpy()
+                .astype(int)
+            )
+
+            for box, track_id in zip(
+                boxes,
+                ids
+            ):
+                x1, y1, x2, y2 = map(
+                    int,
+                    box
+                )
+
+                center_x = int(
+                    (x1 + x2) / 2
+                )
+
+                center_y = int(
+                    (y1 + y2) / 2
+                )
+
+                head_point = (
+                    center_x,
+                    y1
+                )
+
+                body_point = (
+                    center_x,
+                    int((y1 + y2) / 2)
+                )
+
+                foot_point = (
+                    center_x,
+                    y2
+                )
+
+                col = min(
+                    GRID_COLS - 1,
+                    max(
+                        0,
+                        int(
+                            center_x
+                            / (width / GRID_COLS)
+                        )
+                    )
+                )
+
+                row = min(
+                    GRID_ROWS - 1,
+                    max(
+                        0,
+                        int(
+                            center_y
+                            / (height / GRID_ROWS)
+                        )
+                    )
+                )
+
+                zone = (
+                    row * GRID_COLS
+                    + col
+                )
+
+                zone_counts[zone] += 1
+
+                previous = tracks.get(
+                    int(track_id)
+                )
+
+                if previous is None:
+                    dx = 0.0
+                    dy = 0.0
+                else:
+                    dx = center_x - previous[0]
+                    dy = center_y - previous[1]
+
+                tracks[int(track_id)] = (
+                    center_x,
+                    center_y
+                )
+
+                speed = math.hypot(
+                    dx,
+                    dy
+                )
+
+                if speed < MOVEMENT_THRESHOLD:
+                    dx = 0.0
+                    dy = 0.0
+
+                flow_vectors[zone] = (
+                    FLOW_ALPHA
+                    * np.asarray(
+                        [dx, dy],
+                        dtype=np.float32
+                    )
+                    + (1.0 - FLOW_ALPHA)
+                    * flow_vectors[zone]
+                )
+
+                zone_speeds[zone].append(
+                    speed
+                )
+
+                # Approximate lower-body footprint.
+                foot_width = max(
+                    4,
+                    int((x2 - x1) * 0.45)
+                )
+
+                foot_height = max(
+                    4,
+                    int((y2 - y1) * 0.18)
+                )
+
+                fx1 = max(
+                    0,
+                    center_x - foot_width // 2
+                )
+
+                fx2 = min(
+                    width - 1,
+                    center_x + foot_width // 2
+                )
+
+                fy1 = max(
+                    0,
+                    y2 - foot_height
+                )
+
+                fy2 = min(
+                    height - 1,
+                    y2
+                )
+
+                footprint_pixels = max(
+                    0,
+                    (fx2 - fx1)
+                    * (fy2 - fy1)
+                )
+
+                zone_polygon = get_zone_polygon(
+                    zone,
+                    width,
+                    height
+                )
+
+                zone_area_pixels = int(
+                    polygon_area(zone_polygon)
+                )
+
+                occupied_percent = (
+                    footprint_pixels
+                    / zone_area_pixels
+                    * 100
+                    if zone_area_pixels > 0
+                    else 0
+                )
+
+                people_data.append(
+                    {
+                        "track_id": int(track_id),
+                        "head_point": list(head_point),
+                        "body_point": list(body_point),
+                        "foot_point": list(foot_point),
+                        "footprint_pixels": footprint_pixels,
+                        "occupied_footprint_pixels": footprint_pixels,
+                        "zone_area_pixels": zone_area_pixels,
+                        "spatial_occupancy_percent": round(
+                            occupied_percent,
+                            2
+                        ),
+                        "zone": zone,
+                        "age": "not_estimated",
+                        "gender": "not_estimated",
+                    }
+                )
+
+                # Person box and points.
+                cv2.rectangle(
+                    frame,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    2
+                )
+
+                cv2.circle(
+                    frame,
+                    head_point,
+                    5,
+                    (255, 0, 255),
+                    -1
+                )
+
+                cv2.circle(
+                    frame,
+                    foot_point,
+                    4,
+                    (0, 0, 255),
+                    -1
+                )
+
+                draw_text(
+                    frame,
+                    f"ID: {track_id}",
+                    (
+                        x1,
+                        max(20, y1 - 8)
+                    ),
+                    (0, 255, 0),
+                    0.5,
+                    2
+                )
+
+        zones = []
+        total_risk = 0.0
+
+        for zone in range(
+            GRID_ROWS * GRID_COLS
+        ):
+            count = zone_counts[zone]
+
+            history = zone_history[zone]
+
+            history.append(count)
+
+            if len(history) > TREND_HISTORY_SIZE:
+                history.pop(0)
+
+            change = (
+                history[-1] - history[0]
+                if len(history) >= 2
+                else 0
+            )
+
+            if change > 2:
+                trend = "INCREASING"
+            elif change < -2:
+                trend = "DECREASING"
+            else:
+                trend = "STABLE"
+
+            area = get_zone_area(
+                zone,
+                width,
+                height
+            )
+
+            obstacle_area = get_obstacle_area(
+                zone,
+                width,
+                height
+            )
+
+            usable_area = max(
+                0.0,
+                area - obstacle_area
+            )
+
+            capacity = (
+                int(
+                    math.floor(
+                        usable_area
+                        * PEOPLE_PER_M2
+                    )
+                )
+                if usable_area > 0
+                else 0
+            )
+
+            occupancy = (
+                count
+                / capacity
+                * 100
+                if capacity > 0
+                else 0.0
+            )
+
+            flow = get_flow(
+                flow_vectors[zone]
+            )
+
+            average_speed = (
+                float(
+                    np.mean(
+                        zone_speeds[zone]
+                    )
+                )
+                if zone_speeds[zone]
+                else 0.0
+            )
+
+            speed_variation = (
+                float(
+                    np.std(
+                        zone_speeds[zone]
+                    )
+                )
+                if len(zone_speeds[zone]) > 1
+                else 0.0
+            )
+
+            if (
+                capacity > 0
+                and count >= capacity
+            ):
+                flow_state = "CONGESTED"
+
+            elif speed_variation > 8:
+                flow_state = "UNSTABLE"
+
+            else:
+                flow_state = "SMOOTH"
+
+            density = get_density(count)
+
+            raw_risk = calculate_risk(
+                count,
+                capacity,
+                occupancy,
+                density,
+                flow_state,
+                trend
+            )
+
+            risk_values[zone] = (
+                RISK_ALPHA * raw_risk
+                + (1.0 - RISK_ALPHA)
+                * risk_values[zone]
+            )
+
+            zone_risk = round(
+                risk_values[zone]
+            )
+
+            total_risk = max(
+                total_risk,
+                zone_risk
+            )
+
+            zones.append(
+                {
+                    "zone": zone,
+                    "people": count,
+                    "area_m2": round(area, 2),
+                    "obstacle_area_m2": round(
+                        obstacle_area,
+                        2
+                    ),
+                    "usable_area_m2": round(
+                        usable_area,
+                        2
+                    ),
+                    "capacity": capacity,
+                    "occupancy_percent": round(
+                        occupancy,
+                        1
+                    ),
+                    "people_per_m2": round(
+                        count / usable_area,
+                        2
+                    ) if usable_area > 0 else 0,
+                    "density": density,
+                    "flow": flow,
+                    "flow_speed_pixels": round(
+                        average_speed,
+                        2
+                    ),
+                    "flow_variation": round(
+                        speed_variation,
+                        2
+                    ),
+                    "flow_state": flow_state,
+                    "trend": trend,
+                    "risk": zone_risk,
+                }
+            )
+
+        total_people = sum(zone_counts)
+
+        total_area = sum(
+            zone["area_m2"]
+            for zone in zones
         )
 
-        result = results[0]
-        output = frame.copy()
+        total_obstacle_area = sum(
+            zone["obstacle_area_m2"]
+            for zone in zones
+        )
 
-        real_count = 0
-        total_count = 0
-        filtered_count = 0
-        screen_boxes = np.array([])
-        active_person_ids = set()
+        total_usable_area = max(
+            0.0,
+            total_area - total_obstacle_area
+        )
 
-        if result.boxes is not None and len(result.boxes) > 0:
-            boxes = result.boxes
-            all_classes = boxes.cls.cpu().numpy().astype(int)
-            all_coords = boxes.xyxy.cpu().numpy()
-            all_confs = boxes.conf.cpu().numpy()
+        total_capacity = sum(
+            zone["capacity"]
+            for zone in zones
+        )
 
-            # ── Screen Devices (Phone, Laptop, TV) ──
-            screen_mask = np.isin(all_classes, list(SCREEN_CLASSES))
-            screen_boxes = all_coords[screen_mask]
-            screen_confs = all_confs[screen_mask]
+        total_occupancy = (
+            total_people
+            / total_capacity
+            * 100
+            if total_capacity > 0
+            else 0.0
+        )
 
-            for sbox, sconf in zip(screen_boxes, screen_confs):
-                sx1, sy1, sx2, sy2 = sbox.astype(int)
-                cv2.rectangle(output, (sx1, sy1), (sx2, sy2), COLOR_SCREEN_BOX, 2)
-                slabel = f"SCREEN {sconf:.0%}"
-                (tw, th), _ = cv2.getTextSize(slabel, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-                cv2.rectangle(output, (sx1, sy2 + 2), (sx1 + tw + 6, sy2 + th + 8), COLOR_TEXT_BG, -1)
-                cv2.putText(output, slabel, (sx1 + 3, sy2 + th + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_SCREEN_BOX, 1)
+        overall_level = risk_level(
+            total_risk
+        )
 
-            # ── Person Detections ──
-            if boxes.id is not None:
-                all_ids = boxes.id.cpu().numpy().astype(int)
-                person_mask = (all_classes == PERSON_CLASS)
+        # Alert only after sustained critical risk.
+        if total_risk >= 76:
+            high_risk_frames += 1
+        else:
+            high_risk_frames = 0
 
-                if np.any(person_mask):
-                    person_ids = all_ids[person_mask]
-                    person_confs = all_confs[person_mask]
-                    person_coords = all_coords[person_mask]
+        current_time = time.time()
 
-                    # Apply NMS on person boxes to remove duplicate detections on screen
-                    nms_indices = cv2.dnn.NMSBoxes(
-                        bboxes=[[int(b[0]), int(b[1]), int(b[2]-b[0]), int(b[3]-b[1])] for b in person_coords],
-                        scores=person_confs.tolist(),
-                        score_threshold=CONFIDENCE,
-                        nms_threshold=0.40
-                    )
+        alert = False
 
-                    if len(nms_indices) > 0:
-                        nms_indices = np.array(nms_indices).flatten()
-                        person_ids = person_ids[nms_indices]
-                        person_confs = person_confs[nms_indices]
-                        person_coords = person_coords[nms_indices]
+        if (
+            high_risk_frames
+            >= ALERT_CONFIRM_FRAMES
+            and current_time - last_alert_time
+            >= ALERT_COOLDOWN
+        ):
+            alert = True
+            last_alert_time = current_time
 
-                    total_count = len(person_ids)
+            save_alert(
+                total_risk,
+                overall_level,
+                total_people,
+                total_occupancy
+            )
 
-                    for i, (track_id, conf, box) in enumerate(
-                        zip(person_ids, person_confs, person_coords)
-                    ):
-                        active_person_ids.add(track_id)
-                        x1, y1, x2, y2 = box
+        state = {
+            "event_id": EVENT_ID,
+            "camera_name": CAMERA_NAME,
+            "timestamp": time.strftime(
+                "%Y-%m-%dT%H:%M:%S"
+            ),
+            "total_people": total_people,
+            "overall_risk": int(total_risk),
+            "overall_risk_level": overall_level,
+            "alert": alert,
+            "total_area_m2": round(
+                total_area,
+                2
+            ),
+            "obstacle_area_m2": round(
+                total_obstacle_area,
+                2
+            ),
+            "usable_area_m2": round(
+                total_usable_area,
+                2
+            ),
+            "capacity": total_capacity,
+            "occupancy_percent": round(
+                total_occupancy,
+                1
+            ),
+            "people_per_m2": round(
+                total_people / total_usable_area,
+                2
+            ) if total_usable_area > 0 else 0,
+            "zones": zones,
+            "people": people_data,
+            "calibration": {
+                "enabled": calibration is not None,
+                "width_m": (
+                    calibration.get("real_width_m")
+                    if calibration else None
+                ),
+                "height_m": (
+                    calibration.get("real_height_m")
+                    if calibration else None
+                ),
+            },
+            "obstacles": len(obstacles),
+        }
 
-                        # Track history
-                        center_x = (x1 + x2) / 2
-                        center_y = (y1 + y2) / 2
-                        if track_id not in track_history:
-                            track_history[track_id] = []
-                        track_history[track_id].append((center_x, center_y))
-                        if len(track_history[track_id]) > MAX_HISTORY:
-                            track_history[track_id].pop(0)
+        # Save state once per second, not once per frame.
+        if (
+            current_time - last_state_save
+            >= STATE_INTERVAL
+        ):
+            save_json_safe(
+                STATE_FILE,
+                state
+            )
 
-                        pts = np.array(track_history[track_id], dtype=np.int32)
-                        if len(pts) > 1:
-                            cv2.polylines(output, [pts], False, (180, 180, 180), 1)
+            backend.update(state)
 
-                        # ── Multi-Signal Evaluation ──
-                        score, reason, is_real = person_filter.evaluate_person(
-                            frame, frame_gray, box, track_id, float(conf),
-                            person_coords, i, screen_boxes
-                        )
+            last_state_save = current_time
 
-                        if is_real:
-                            real_count += 1
-                            color = COLOR_REAL
-                            label = f"REAL #{track_id} {conf:.0%} [{score:.2f}]"
-                        else:
-                            filtered_count += 1
-                            color = COLOR_FILTERED
-                            tag = reason if reason != "OK" else "SCREEN/PHOTO"
-                            label = f"{tag} #{track_id} {conf:.0%} [{score:.2f}]"
+        # ---------------- camera overlay ----------------
 
-                        ix1, iy1 = int(x1), int(y1)
-                        ix2, iy2 = int(x2), int(y2)
-                        cv2.rectangle(output, (ix1, iy1), (ix2, iy2), color, 2)
+        floor = get_calibration_points()
 
-                        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)
-                        cv2.rectangle(output, (ix1, max(0, iy1 - th - 10)), (ix1 + tw + 8, iy1), COLOR_TEXT_BG, -1)
-                        cv2.rectangle(output, (ix1, max(0, iy1 - th - 10)), (ix1 + tw + 8, iy1), color, 1)
-                        cv2.putText(output, label, (ix1 + 4, iy1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1)
+        if floor is not None:
+            cv2.polylines(
+                frame,
+                [floor.astype(np.int32)],
+                True,
+                (0, 165, 255),
+                2
+            )
 
-        person_filter.post_frame_update(frame_gray, active_person_ids)
+        for obstacle in obstacles:
+            points = np.asarray(
+                obstacle.get("points", []),
+                dtype=np.int32
+            )
 
-        # ── FPS Calculation ──
-        fps_counter += 1
-        elapsed = time.time() - fps_timer
-        if elapsed >= 1.0:
-            fps = fps_counter / elapsed
-            fps_counter = 0
-            fps_timer = time.time()
+            if len(points) >= 3:
+                cv2.polylines(
+                    frame,
+                    [points],
+                    True,
+                    (255, 0, 255),
+                    2
+                )
 
-        # ── Futuristic HUD Card Overlay ──
-        hud_bg = output.copy()
-        cv2.rectangle(hud_bg, (15, 15), (390, 160), (15, 15, 15), -1)
-        cv2.addWeighted(hud_bg, 0.65, output, 0.35, 0, output)
-        cv2.rectangle(output, (15, 15), (390, 160), (60, 60, 60), 1)
+        cv2.line(
+            frame,
+            (width // 2, 0),
+            (width // 2, height),
+            (255, 255, 255),
+            1
+        )
 
-        cv2.putText(output, "AI CROWD INTELLIGENCE", (30, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.65, COLOR_ACCENT, 2)
-        cv2.putText(output, f"Real People:   {real_count}", (30, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.65, COLOR_REAL, 2)
-        cv2.putText(output, f"Filtered Out:  {filtered_count}  (Total: {total_count})", (30, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_FILTERED, 2)
-        cv2.putText(output, f"FPS: {fps:.1f}  |  Screens Detected: {len(screen_boxes)}", (30, 135), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (220, 220, 220), 1)
+        cv2.line(
+            frame,
+            (0, height // 2),
+            (width, height // 2),
+            (255, 255, 255),
+            1
+        )
 
-        cv2.imshow("AI Crowd Intelligence - Real Person Detection", output)
+        # Update local MJPEG stream.
+        ok, jpeg = cv2.imencode(
+            ".jpg",
+            frame,
+            [
+                cv2.IMWRITE_JPEG_QUALITY,
+                65
+            ]
+        )
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        if ok:
+            with jpeg_lock:
+                latest_jpeg = jpeg.tobytes()
+
+        # ---------------- structured dashboard ----------------
+
+        display_width = 1280
+        display_video_width = 900
+        side_width = 380
+        bottom_height = 130
+
+        scale = (
+            display_video_width
+            / width
+        )
+
+        display_video_height = int(
+            height * scale
+        )
+
+        camera_view = cv2.resize(
+            frame,
+            (
+                display_video_width,
+                display_video_height
+            ),
+            interpolation=cv2.INTER_AREA
+        )
+
+        dashboard = np.full(
+            (
+                display_video_height
+                + bottom_height,
+                display_width,
+                3
+            ),
+            (238, 242, 245),
+            dtype=np.uint8
+        )
+
+        dashboard[
+            :display_video_height,
+            :display_video_width
+        ] = camera_view
+
+        side = np.full(
+            (
+                display_video_height,
+                side_width,
+                3
+            ),
+            (245, 247, 249),
+            dtype=np.uint8
+        )
+
+        draw_text(
+            side,
+            "LIVE CROWD DATA",
+            (18, 28),
+            (30, 40, 50),
+            0.65,
+            2
+        )
+
+        draw_text(
+            side,
+            f"Event: {EVENT_ID}",
+            (18, 52),
+            (100, 110, 120),
+            0.42,
+            1
+        )
+
+        card_height = (
+            display_video_height - 68
+        ) // 4
+
+        for zone, data in enumerate(zones):
+
+            top = 62 + zone * card_height
+            bottom = top + card_height - 7
+
+            cv2.rectangle(
+                side,
+                (10, top),
+                (side_width - 10, bottom),
+                (255, 255, 255),
+                -1
+            )
+
+            cv2.rectangle(
+                side,
+                (10, top),
+                (side_width - 10, bottom),
+                (215, 220, 225),
+                1
+            )
+
+            draw_text(
+                side,
+                f"ZONE {zone + 1}",
+                (20, top + 23),
+                (30, 40, 50),
+                0.52,
+                2
+            )
+
+            draw_text(
+                side,
+                f"People: {data['people']}",
+                (20, top + 47),
+                (50, 60, 70),
+                0.43,
+                1
+            )
+
+            draw_text(
+                side,
+                f"Area: {data['area_m2']:.1f} m2",
+                (170, top + 47),
+                (0, 130, 190),
+                0.40,
+                1
+            )
+
+            draw_text(
+                side,
+                f"Usable: {data['usable_area_m2']:.1f} m2",
+                (20, top + 70),
+                (0, 130, 190),
+                0.40,
+                1
+            )
+
+            draw_text(
+                side,
+                f"Capacity: {data['capacity']}",
+                (190, top + 70),
+                (0, 130, 190),
+                0.40,
+                1
+            )
+
+            draw_text(
+                side,
+                f"Occupancy: {data['occupancy_percent']:.1f}%",
+                (20, top + 93),
+                (0, 130, 190),
+                0.40,
+                1
+            )
+
+            draw_text(
+                side,
+                f"Flow: {data['flow']}",
+                (205, top + 93),
+                (0, 150, 170),
+                0.40,
+                1
+            )
+
+            draw_text(
+                side,
+                f"{data['flow_state']} | {data['trend']}",
+                (20, top + 116),
+                (80, 90, 100),
+                0.37,
+                1
+            )
+
+            draw_text(
+                side,
+                f"Risk: {data['risk']}",
+                (205, top + 116),
+                (80, 90, 100),
+                0.37,
+                1
+            )
+
+        dashboard[
+            :display_video_height,
+            display_video_width:
+        ] = side
+
+        # ---------------- overall section ----------------
+
+        bottom = np.full(
+            (
+                bottom_height,
+                display_width,
+                3
+            ),
+            (232, 237, 241),
+            dtype=np.uint8
+        )
+
+        cv2.line(
+            bottom,
+            (0, 0),
+            (display_width, 0),
+            (200, 205, 210),
+            2
+        )
+
+        draw_text(
+            bottom,
+            "OVERALL CROWD INTELLIGENCE",
+            (20, 29),
+            (25, 35, 45),
+            0.58,
+            2
+        )
+
+        summary = [
+            ("PEOPLE", str(total_people)),
+            ("CAPACITY", str(total_capacity)),
+            ("OCCUPANCY", f"{total_occupancy:.1f}%"),
+            ("USABLE AREA", f"{total_usable_area:.1f} m2"),
+            ("RISK", str(int(total_risk))),
+            ("STATUS", overall_level),
+        ]
+
+        summary_width = 205
+
+        for index, (label, value) in enumerate(summary):
+
+            x = 20 + index * summary_width
+
+            draw_text(
+                bottom,
+                label,
+                (x, 57),
+                (100, 110, 120),
+                0.37,
+                1
+            )
+
+            color = (35, 145, 80)
+
+            if label == "RISK":
+                if total_risk > 75:
+                    color = (40, 40, 210)
+                elif total_risk > 50:
+                    color = (0, 120, 220)
+                elif total_risk > 25:
+                    color = (0, 145, 210)
+
+            if label == "STATUS":
+                if overall_level == "CRITICAL":
+                    color = (40, 40, 210)
+                elif overall_level == "HIGH":
+                    color = (0, 120, 220)
+                elif overall_level == "MODERATE":
+                    color = (0, 145, 210)
+
+            draw_text(
+                bottom,
+                value,
+                (x, 88),
+                color,
+                0.58,
+                2
+            )
+
+        draw_text(
+            bottom,
+            f"Camera: {CAMERA_NAME}",
+            (20, 114),
+            (100, 110, 120),
+            0.34,
+            1
+        )
+
+        draw_text(
+            bottom,
+            "F: Fullscreen    Q / ESC: Exit",
+            (display_width - 240, 114),
+            (100, 110, 120),
+            0.34,
+            1
+        )
+
+        dashboard[
+            display_video_height:
+            display_video_height + bottom_height,
+            :
+        ] = bottom
+
+        cv2.imshow(
+            WINDOW_NAME,
+            dashboard
+        )
+
+        key = cv2.waitKey(1) & 255
+
+        if key in (
+            27,
+            ord("q"),
+            ord("Q")
+        ):
+            running = False
+
+        elif key in (
+            ord("f"),
+            ord("F")
+        ):
+            fullscreen = not fullscreen
+
+            if fullscreen:
+                cv2.setWindowProperty(
+                    WINDOW_NAME,
+                    cv2.WND_PROP_FULLSCREEN,
+                    cv2.WINDOW_FULLSCREEN
+                )
+            else:
+                cv2.setWindowProperty(
+                    WINDOW_NAME,
+                    cv2.WND_PROP_FULLSCREEN,
+                    cv2.WINDOW_NORMAL
+                )
+
+                cv2.resizeWindow(
+                    WINDOW_NAME,
+                    1280,
+                    720
+                )
 
 finally:
     camera.stop()
+    backend.stop()
+
+    try:
+        video_server.shutdown()
+    except Exception:
+        pass
+
     cv2.destroyAllWindows()
-    print("System stopped.")
+
+print("AI Crowd Intelligence stopped.")

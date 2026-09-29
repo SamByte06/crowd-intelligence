@@ -200,23 +200,37 @@ function EventPage() {
                         </div>
 
                         <div className="stat-card">
+                            <span>📐</span>
+                            <h3>{crowd?.spatial?.usable_area_m2 ?? crowd?.usable_area_m2 ?? 0} m²</h3>
+                            <p>Usable Area ({crowd?.crowd?.density_pm2 ?? crowd?.people_per_m2 ?? 0} p/m²)</p>
+                        </div>
+
+                        <div className="stat-card">
+                            <span>📈</span>
+                            <h3>{crowd?.temporal?.trend || crowd?.crowd?.trend || "STABLE"}</h3>
+                            <p>
+                                Growth: {crowd?.temporal?.growth_rate ? (crowd.temporal.growth_rate > 0 ? `+${crowd.temporal.growth_rate}/min` : `${crowd.temporal.growth_rate}/min`) : "0.0/min"}
+                            </p>
+                        </div>
+
+                        <div className="stat-card">
+                            <span>🔮</span>
+                            <h3>~{crowd?.forecast?.projected_people_5min ?? crowd?.total_people ?? 0}</h3>
+                            <p>5-Min Forecast (Proto)</p>
+                        </div>
+
+                        <div className="stat-card">
+                            <span>⚡</span>
+                            <h3>{crowd?.forecast?.rush_forecast || "LOW"}</h3>
+                            <p>Rush Likelihood</p>
+                        </div>
+
+                        <div className="stat-card">
                             <span>⚠</span>
                             <h3>{crowd?.overall_risk ?? 0}/100</h3>
                             <p>
                                 Risk <RiskBadge level={crowd?.overall_risk_level || "SAFE"} />
                             </p>
-                        </div>
-
-                        <div className="stat-card">
-                            <span>↗</span>
-                            <h3>{crowd?.highest_risk_zone ?? 0}</h3>
-                            <p>Highest Risk Zone</p>
-                        </div>
-
-                        <div className="stat-card">
-                            <span>●</span>
-                            <h3>{crowd?.alert || "NO ALERT"}</h3>
-                            <p>Alert Status</p>
                         </div>
                     </div>
 
@@ -247,9 +261,14 @@ function EventPage() {
                                 dominant_direction: "STATIONARY",
                                 trend: "STABLE",
                                 congestion: "LOW",
+                                usable_area_m2: 0,
+                                net_flow: 0,
                                 risk: 0,
                                 risk_level: "SAFE",
                             };
+
+                            const zUsable = zone.usable_area_m2;
+                            const zNet = zone.net_flow ?? 0;
 
                             return (
                                 <div
@@ -268,23 +287,23 @@ function EventPage() {
 
                                     <div className="zone-details">
                                         <div>
+                                            <strong>Usable Space</strong>
+                                            <span>{zUsable > 0 ? `${zUsable.toFixed(1)} m²` : (zone.floor_area_m2 > 0 ? `${zone.floor_area_m2.toFixed(1)} m²` : "Outside floor")}</span>
+                                        </div>
+
+                                        <div>
+                                            <strong>Flow</strong>
+                                            <span>{zone.dominant_direction || zone.flow || "STATIONARY"} {zNet !== 0 ? `(${zNet > 0 ? `+${zNet}` : zNet})` : ""}</span>
+                                        </div>
+
+                                        <div>
                                             <strong>Density</strong>
                                             <span>{zone.density || "LOW"}</span>
                                         </div>
 
                                         <div>
                                             <strong>Trend</strong>
-                                            <span>{zone.trend || "STABLE"}</span>
-                                        </div>
-
-                                        <div>
-                                            <strong>Flow</strong>
-                                            <span>{zone.dominant_direction || "STATIONARY"}</span>
-                                        </div>
-
-                                        <div>
-                                            <strong>Congestion</strong>
-                                            <span>{zone.congestion || "LOW"}</span>
+                                            <span>{zone.concentration_trend || zone.trend || "STABLE"}</span>
                                         </div>
                                     </div>
 

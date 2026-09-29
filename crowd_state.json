@@ -1,84 +1,275 @@
 {
-  "timestamp": "22-09-2026 09:06:22",
-  "event_id": "testing_phase",
+  "event_id": "event_1",
   "camera_name": "Camera 01 - Main Entrance",
-  "camera_source": "Laptop Webcam",
-  "camera_status": "LIVE",
-  "total_people": 1,
-  "overall_risk": 0,
+  "timestamp": "2026-09-29T14:04:42",
+  "total_people": 2,
+  "overall_risk": 5,
   "overall_risk_level": "SAFE",
-  "highest_risk_zone": 0,
-  "highest_risk_score": 0,
+  "highest_risk_zone": 2,
+  "highest_risk_score": 5,
   "highest_risk_level": "SAFE",
-  "alert": "NO ALERT",
+  "alert": null,
+  "gender_summary": {
+    "male": 2,
+    "female": 0,
+    "unknown": 0,
+    "male_percent": 100.0,
+    "female_percent": 0.0,
+    "unknown_percent": 0.0
+  },
+  "age_summary": {
+    "child": 0,
+    "adult": 2,
+    "senior": 0,
+    "child_percent": 0.0,
+    "adult_percent": 100.0,
+    "senior_percent": 0.0
+  },
+  "spatial": {
+    "floor_detected": true,
+    "floor_locked": true,
+    "floor_area_m2": 3.32,
+    "obstacle_area_m2": 0.0,
+    "usable_area_m2": 3.32,
+    "floor_detection_confidence": 0.94,
+    "obstacle_detection_confidence": 0.85,
+    "spatial_confidence": "HIGH",
+    "is_metric_calibrated": false,
+    "scale_mode": "auto_estimated",
+    "detected_obstacles_count": 0
+  },
+  "crowd": {
+    "total_people": 2,
+    "density": 0.6,
+    "density_pm2": 0.6,
+    "occupancy_percent": 33.3,
+    "trend": "STABLE",
+    "growth_rate": 1.47,
+    "spatial_pressure": "NORMAL"
+  },
+  "flow": {
+    "dominant_direction": "LEFT",
+    "net_flow": 0
+  },
+  "temporal": {
+    "trend": "STABLE",
+    "growth_rate": 1.47,
+    "growth_rate_per_min": 1.47,
+    "spatial_pressure": "NORMAL"
+  },
+  "forecast": {
+    "projected_people_5min": 9,
+    "rush_forecast": "LOW",
+    "rush_score": 10.0,
+    "label": "Prototype Forecast"
+  },
+  "risk": {
+    "score": 5,
+    "level": "SAFE"
+  },
+  "total_area_m2": 3.32,
+  "floor_area_m2": 3.32,
+  "obstacle_area_m2": 0.0,
+  "usable_area_m2": 3.32,
+  "capacity": 6,
+  "occupancy_percent": 33.3,
+  "people_per_m2": 0.6,
   "zones": [
     {
       "zone": 0,
       "people": 0,
+      "floor_area_m2": 0.0,
+      "area_m2": 0.0,
+      "obstacle_area_m2": 0.0,
+      "usable_area_m2": 0.0,
+      "obstacle_ratio": 0.0,
+      "capacity": 0,
+      "occupancy_percent": 0.0,
+      "people_per_m2": 0,
       "density": "LOW",
-      "flow": {
-        "LEFT": 0,
-        "RIGHT": 0,
-        "UP": 0,
-        "DOWN": 0,
-        "STATIONARY": 0
-      },
+      "density_pm2": 0.0,
+      "flow": "LEFT",
       "dominant_direction": "LEFT",
+      "flow_speed_pixels": 0.0,
+      "flow_variation": 0.0,
+      "flow_state": "SMOOTH",
       "trend": "STABLE",
-      "congestion": "LOW",
+      "incoming": 0,
+      "outgoing": 0,
+      "net_flow": 0,
+      "concentration_trend": "STABLE",
       "risk": 0,
-      "risk_level": "SAFE"
+      "risk_level": "SAFE",
+      "gender_distribution": {
+        "male": 0,
+        "female": 0,
+        "unknown": 0
+      },
+      "age_distribution": {
+        "child": 0,
+        "adult": 0,
+        "senior": 0
+      }
     },
     {
       "zone": 1,
       "people": 0,
+      "floor_area_m2": 0.0,
+      "area_m2": 0.0,
+      "obstacle_area_m2": 0.0,
+      "usable_area_m2": 0.0,
+      "obstacle_ratio": 0.0,
+      "capacity": 0,
+      "occupancy_percent": 0.0,
+      "people_per_m2": 0,
       "density": "LOW",
-      "flow": {
-        "LEFT": 0,
-        "RIGHT": 0,
-        "UP": 0,
-        "DOWN": 0,
-        "STATIONARY": 0
-      },
-      "dominant_direction": "LEFT",
+      "density_pm2": 0.0,
+      "flow": "STATIONARY",
+      "dominant_direction": "STATIONARY",
+      "flow_speed_pixels": 0.0,
+      "flow_variation": 0.0,
+      "flow_state": "SMOOTH",
       "trend": "STABLE",
-      "congestion": "LOW",
+      "incoming": 0,
+      "outgoing": 0,
+      "net_flow": 0,
+      "concentration_trend": "STABLE",
       "risk": 0,
-      "risk_level": "SAFE"
+      "risk_level": "SAFE",
+      "gender_distribution": {
+        "male": 0,
+        "female": 0,
+        "unknown": 0
+      },
+      "age_distribution": {
+        "child": 0,
+        "adult": 0,
+        "senior": 0
+      }
     },
     {
       "zone": 2,
-      "people": 0,
+      "people": 1,
+      "floor_area_m2": 1.66,
+      "area_m2": 1.66,
+      "obstacle_area_m2": 0.0,
+      "usable_area_m2": 1.66,
+      "obstacle_ratio": 0.0,
+      "capacity": 3,
+      "occupancy_percent": 33.3,
+      "people_per_m2": 0.6,
       "density": "LOW",
-      "flow": {
-        "LEFT": 0,
-        "RIGHT": 0,
-        "UP": 0,
-        "DOWN": 0,
-        "STATIONARY": 0
-      },
-      "dominant_direction": "LEFT",
+      "density_pm2": 0.6,
+      "flow": "STATIONARY",
+      "dominant_direction": "STATIONARY",
+      "flow_speed_pixels": 0.0,
+      "flow_variation": 0.0,
+      "flow_state": "SMOOTH",
       "trend": "STABLE",
-      "congestion": "LOW",
-      "risk": 0,
-      "risk_level": "SAFE"
+      "incoming": 0,
+      "outgoing": 0,
+      "net_flow": 0,
+      "concentration_trend": "STABLE",
+      "risk": 5,
+      "risk_level": "SAFE",
+      "gender_distribution": {
+        "male": 1,
+        "female": 0,
+        "unknown": 0
+      },
+      "age_distribution": {
+        "child": 0,
+        "adult": 1,
+        "senior": 0
+      }
     },
     {
       "zone": 3,
       "people": 1,
+      "floor_area_m2": 1.66,
+      "area_m2": 1.66,
+      "obstacle_area_m2": 0.0,
+      "usable_area_m2": 1.66,
+      "obstacle_ratio": 0.0,
+      "capacity": 3,
+      "occupancy_percent": 33.3,
+      "people_per_m2": 0.6,
       "density": "LOW",
-      "flow": {
-        "LEFT": 0,
-        "RIGHT": 0,
-        "UP": 0,
-        "DOWN": 0,
-        "STATIONARY": 1
-      },
+      "density_pm2": 0.6,
+      "flow": "STATIONARY",
       "dominant_direction": "STATIONARY",
+      "flow_speed_pixels": 0.0,
+      "flow_variation": 0.0,
+      "flow_state": "SMOOTH",
       "trend": "STABLE",
-      "congestion": "LOW",
-      "risk": 0,
-      "risk_level": "SAFE"
+      "incoming": 0,
+      "outgoing": 0,
+      "net_flow": 0,
+      "concentration_trend": "STABLE",
+      "risk": 5,
+      "risk_level": "SAFE",
+      "gender_distribution": {
+        "male": 1,
+        "female": 0,
+        "unknown": 0
+      },
+      "age_distribution": {
+        "child": 0,
+        "adult": 1,
+        "senior": 0
+      }
     }
-  ]
+  ],
+  "people": [
+    {
+      "track_id": 364,
+      "head_point": [
+        317,
+        233
+      ],
+      "body_point": [
+        317,
+        356
+      ],
+      "foot_point": [
+        317,
+        479
+      ],
+      "footprint_pixels": 6952,
+      "occupied_footprint_pixels": 6952,
+      "zone_area_pixels": 76800,
+      "spatial_occupancy_percent": 9.05,
+      "zone": 2,
+      "age": "Adult",
+      "gender": "Male"
+    },
+    {
+      "track_id": 398,
+      "head_point": [
+        622,
+        405
+      ],
+      "body_point": [
+        622,
+        442
+      ],
+      "foot_point": [
+        622,
+        479
+      ],
+      "footprint_pixels": 182,
+      "occupied_footprint_pixels": 182,
+      "zone_area_pixels": 76800,
+      "spatial_occupancy_percent": 0.24,
+      "zone": 3,
+      "age": "Adult",
+      "gender": "Male"
+    }
+  ],
+  "calibration": {
+    "enabled": false,
+    "width_m": 2.5,
+    "height_m": 4.0
+  },
+  "obstacles": 0
 }

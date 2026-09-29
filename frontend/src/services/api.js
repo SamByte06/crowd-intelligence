@@ -1,4 +1,4 @@
-const API_BASE = "https://crowd-intelligence-back.vercel.app/api";
+const API_BASE = "http://localhost:8001/api";
 
 const STORAGE_KEY_EVENTS = "crowd_intelligence_events";
 
@@ -67,6 +67,19 @@ export function clearStoredEvents() {
 }
 
 
+export async function clearAllEvents() {
+    clearStoredEvents();
+    try {
+        await fetch(`${API_BASE}/events`, {
+            method: "DELETE",
+        });
+    } catch (error) {
+        console.warn("Backend event clear offline/failed:", error.message);
+    }
+    return { success: true };
+}
+
+
 // ─────────────────────────────────────────────
 // Clean Zero Default Crowd Data
 // ─────────────────────────────────────────────
@@ -94,19 +107,66 @@ export const CLEAN_CROWD_DATA = {
 
     alert: null,
 
+    spatial: {
+        floor_detected: false,
+        floor_locked: false,
+        floor_area_m2: 0.0,
+        obstacle_area_m2: 0.0,
+        usable_area_m2: 0.0,
+        floor_detection_confidence: 0.0,
+        obstacle_detection_confidence: 0.0,
+        spatial_confidence: "LEARNING",
+        is_metric_calibrated: false,
+        scale_mode: "auto_estimated",
+        detected_obstacles_count: 0,
+    },
+
+    crowd: {
+        total_people: 0,
+        density: 0.0,
+        density_pm2: 0.0,
+        occupancy_percent: 0.0,
+        trend: "STABLE",
+        growth_rate: 0.0,
+        spatial_pressure: "NORMAL",
+    },
+
+    flow: {
+        dominant_direction: "STATIONARY",
+        net_flow: 0,
+    },
+
+    temporal: {
+        trend: "STABLE",
+        growth_rate: 0.0,
+        growth_rate_per_min: 0.0,
+        spatial_pressure: "NORMAL",
+    },
+
+    forecast: {
+        projected_people_5min: 0,
+        rush_forecast: "LOW",
+        rush_score: 0.0,
+        label: "Prototype Forecast",
+    },
+
     zones: [
         {
             zone: 0,
             people: 0,
             density: "LOW",
-            flow: {
-                LEFT: 0,
-                RIGHT: 0,
-                UP: 0,
-                DOWN: 0,
-                STATIONARY: 0,
-            },
+            density_pm2: 0.0,
+            usable_area_m2: 0.0,
+            floor_area_m2: 0.0,
+            obstacle_area_m2: 0.0,
+            capacity: 0,
+            occupancy_percent: 0.0,
+            flow: "STATIONARY",
             dominant_direction: "STATIONARY",
+            incoming: 0,
+            outgoing: 0,
+            net_flow: 0,
+            concentration_trend: "STABLE",
             trend: "STABLE",
             congestion: "LOW",
             risk: 0,
@@ -117,14 +177,18 @@ export const CLEAN_CROWD_DATA = {
             zone: 1,
             people: 0,
             density: "LOW",
-            flow: {
-                LEFT: 0,
-                RIGHT: 0,
-                UP: 0,
-                DOWN: 0,
-                STATIONARY: 0,
-            },
+            density_pm2: 0.0,
+            usable_area_m2: 0.0,
+            floor_area_m2: 0.0,
+            obstacle_area_m2: 0.0,
+            capacity: 0,
+            occupancy_percent: 0.0,
+            flow: "STATIONARY",
             dominant_direction: "STATIONARY",
+            incoming: 0,
+            outgoing: 0,
+            net_flow: 0,
+            concentration_trend: "STABLE",
             trend: "STABLE",
             congestion: "LOW",
             risk: 0,
@@ -135,14 +199,18 @@ export const CLEAN_CROWD_DATA = {
             zone: 2,
             people: 0,
             density: "LOW",
-            flow: {
-                LEFT: 0,
-                RIGHT: 0,
-                UP: 0,
-                DOWN: 0,
-                STATIONARY: 0,
-            },
+            density_pm2: 0.0,
+            usable_area_m2: 0.0,
+            floor_area_m2: 0.0,
+            obstacle_area_m2: 0.0,
+            capacity: 0,
+            occupancy_percent: 0.0,
+            flow: "STATIONARY",
             dominant_direction: "STATIONARY",
+            incoming: 0,
+            outgoing: 0,
+            net_flow: 0,
+            concentration_trend: "STABLE",
             trend: "STABLE",
             congestion: "LOW",
             risk: 0,
@@ -153,14 +221,18 @@ export const CLEAN_CROWD_DATA = {
             zone: 3,
             people: 0,
             density: "LOW",
-            flow: {
-                LEFT: 0,
-                RIGHT: 0,
-                UP: 0,
-                DOWN: 0,
-                STATIONARY: 0,
-            },
+            density_pm2: 0.0,
+            usable_area_m2: 0.0,
+            floor_area_m2: 0.0,
+            obstacle_area_m2: 0.0,
+            capacity: 0,
+            occupancy_percent: 0.0,
+            flow: "STATIONARY",
             dominant_direction: "STATIONARY",
+            incoming: 0,
+            outgoing: 0,
+            net_flow: 0,
+            concentration_trend: "STABLE",
             trend: "STABLE",
             congestion: "LOW",
             risk: 0,
