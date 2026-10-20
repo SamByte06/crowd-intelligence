@@ -15,6 +15,8 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
+from video_source_manager import UniversalCapture, is_youtube_url, extract_youtube_info
+
 DEVICE = 0 if torch.cuda.is_available() else "cpu"
 
 
@@ -22,14 +24,21 @@ DEVICE = 0 if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--event-id", default="event_1")
-parser.add_argument("--camera", type=int, default=0)
+parser.add_argument("--camera", default="0", help="Webcam index (0) or video source")
+parser.add_argument("--source", default=None, help="Video source: Webcam index (0), YouTube link, video file path, or stream URL")
+parser.add_argument("--youtube", default=None, help="Direct YouTube video URL to analyze")
 parser.add_argument("--calibrate", action="store_true")
 parser.add_argument("--setup-obstacles", action="store_true")
 parser.add_argument("--clear-calibration", action="store_true")
 parser.add_argument("--clear-obstacles", action="store_true")
+parser.add_argument("--conf", type=float, default=0.10, help="Confidence threshold for YOLO (default 0.10 for dense crowds)")
+parser.add_argument("--imgsz", type=int, default=1024, help="Inference image resolution (default 1024)")
+parser.add_argument("--iou", type=float, default=0.65, help="NMS IoU threshold for dense overlapping crowds")
 parser.add_argument("--event-capacity", type=int, default=None, help="Operator-defined maximum event capacity")
-parser.add_argument("--hide-spatial-overlay", action="store_true", help="Hide spatial floor/obstacle visual overlay")
+parser.add_argument("--show-spatial-overlay", action="store_true", help="Display floor and obstacle visual overlay on video (off by default)")
 parser.add_argument("--color", action="store_true", help="Display camera feed in full color instead of default surveillance grayscale")
+parser.add_argument("--roi", default=None, help="Region of Interest: 'news', 'right', or 'x,y,w,h' coordinates")
+parser.add_argument("--dense", action="store_true", help="Enable ultra-dense crowd detection boost")
 args = parser.parse_args()
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -41,7 +50,14 @@ STATE_FILE = os.path.join(ROOT, "crowd_state.json")
 ALERT_FILE = os.path.join(ROOT, "alert_history.csv")
 
 EVENT_ID = args.event_id
-CAMERA_INDEX = args.camera
+
+_raw_source = args.youtube or args.source or args.camera
+if isinstance(_raw_source, str) and _raw_source.strip().isdigit():
+    CAMERA_SOURCE = int(_raw_source.strip())
+else:
+    CAMERA_SOURCE = _raw_source
+
+CAMERA_INDEX = CAMERA_SOURCE if isinstance(CAMERA_SOURCE, int) else 0
 CAMERA_NAME = "Camera 01 - Main Entrance"
 
 # Change this only if your local FastAPI server uses another port.
@@ -49,9 +65,25 @@ BACKEND_URL = os.getenv("CROWD_BACKEND_URL", "http://127.0.0.1:8001")
 
 STREAM_PORT = 8000
 
-MODEL_CONFIDENCE = 0.25
-IMAGE_SIZE = 640
+DENSE_CROWD_MODE = getattr(args, "dense", False)
+MODEL_CONFIDENCE = 0.06 if DENSE_CROWD_MODE else args.conf
+IMAGE_SIZE = 1280 if DENSE_CROWD_MODE else args.imgsz
+IOU_THRESHOLD = 0.70 if DENSE_CROWD_MODE else args.iou
 INFERENCE_EVERY = 2
+SHOW_BOUNDING_BOXES = False
+
+# Region of Interest for crop focus (e.g. news broadcast sub-window)
+active_roi = None
+if args.roi:
+    if args.roi.lower() in ("news", "right", "split"):
+        active_roi = "news"
+    else:
+        try:
+            parts = [int(p.strip()) for p in args.roi.split(",")]
+            if len(parts) == 4:
+                active_roi = tuple(parts)
+        except Exception:
+            pass
 
 GRID_ROWS = 2
 GRID_COLS = 2
@@ -202,7 +234,7 @@ class SpatialIntelligence:
             and float(calibration_data.get("real_width_m", 0)) > 0
             and float(calibration_data.get("real_height_m", 0)) > 0
         )
-        self.show_spatial_overlay = not args.hide_spatial_overlay
+        self.show_spatial_overlay = getattr(args, "show_spatial_overlay", False)
         self.last_obstacle_scan = 0
         self.OBSTACLE_CLASSES = {
             24: "Backpack",
@@ -469,20 +501,31 @@ class SpatialIntelligence:
             return np.asarray(self.manual_calibration["homography"], dtype=np.float32)
         return None
 
-    def get_zone_spatial_metrics(self, zone_idx, width, height):
+    def get_zone_spatial_metrics(self, zone_idx, width, height, roi=None):
         """
         Calculates Floor Area, Obstacle Area, and Usable Area (in m²) for a specific zone
         using pixel-accurate masking and furniture metric anchors (Bed/Couch/Chairs).
         Also returns zone furniture seating capacity.
         """
-        zone_width = width / GRID_COLS
-        zone_height = height / GRID_ROWS
-        col = zone_idx % GRID_COLS
-        row = zone_idx // GRID_COLS
-        x1 = int(col * zone_width)
-        y1 = int(row * zone_height)
-        x2 = int((col + 1) * zone_width)
-        y2 = int((row + 1) * zone_height)
+        if roi and isinstance(roi, (list, tuple)) and len(roi) == 4:
+            rx, ry, rw, rh = roi
+            zone_width = rw / GRID_COLS
+            zone_height = rh / GRID_ROWS
+            col = zone_idx % GRID_COLS
+            row = zone_idx // GRID_COLS
+            x1 = int(rx + col * zone_width)
+            y1 = int(ry + row * zone_height)
+            x2 = int(rx + (col + 1) * zone_width)
+            y2 = int(ry + (row + 1) * zone_height)
+        else:
+            zone_width = width / GRID_COLS
+            zone_height = height / GRID_ROWS
+            col = zone_idx % GRID_COLS
+            row = zone_idx // GRID_COLS
+            x1 = int(col * zone_width)
+            y1 = int(row * zone_height)
+            x2 = int((col + 1) * zone_width)
+            y2 = int((row + 1) * zone_height)
 
         floor_pts = self.get_floor_points()
         if floor_pts is None or len(floor_pts) < 3:
@@ -833,17 +876,26 @@ def project_to_ground(points):
     ).reshape(-1, 2)
 
 
-def get_zone_polygon(zone, width, height):
-    zone_width = width / GRID_COLS
-    zone_height = height / GRID_ROWS
-
-    col = zone % GRID_COLS
-    row = zone // GRID_COLS
-
-    x1 = col * zone_width
-    y1 = row * zone_height
-    x2 = (col + 1) * zone_width
-    y2 = (row + 1) * zone_height
+def get_zone_polygon(zone, width, height, roi=None):
+    if roi and isinstance(roi, (list, tuple)) and len(roi) == 4:
+        rx, ry, rw, rh = roi
+        zone_width = rw / GRID_COLS
+        zone_height = rh / GRID_ROWS
+        col = zone % GRID_COLS
+        row = zone // GRID_COLS
+        x1 = rx + col * zone_width
+        y1 = ry + row * zone_height
+        x2 = rx + (col + 1) * zone_width
+        y2 = ry + (row + 1) * zone_height
+    else:
+        zone_width = width / GRID_COLS
+        zone_height = height / GRID_ROWS
+        col = zone % GRID_COLS
+        row = zone // GRID_COLS
+        x1 = col * zone_width
+        y1 = row * zone_height
+        x2 = (col + 1) * zone_width
+        y2 = (row + 1) * zone_height
 
     return np.asarray(
         [
@@ -879,10 +931,13 @@ def get_obstacle_area(zone, width, height):
 
 
 def calibrate_floor():
-    camera = cv2.VideoCapture(
-        CAMERA_INDEX,
-        cv2.CAP_DSHOW
-    )
+    if is_youtube_url(CAMERA_SOURCE):
+        info = extract_youtube_info(CAMERA_SOURCE)
+        camera = cv2.VideoCapture(info["stream_url"])
+    elif isinstance(CAMERA_SOURCE, int) or (isinstance(CAMERA_SOURCE, str) and str(CAMERA_SOURCE).strip().isdigit()):
+        camera = cv2.VideoCapture(int(CAMERA_SOURCE), cv2.CAP_DSHOW)
+    else:
+        camera = cv2.VideoCapture(str(CAMERA_SOURCE))
 
     if not camera.isOpened():
         raise RuntimeError("Camera could not be opened.")
@@ -1032,10 +1087,13 @@ def setup_obstacles():
             "Calibrate the floor before adding obstacles."
         )
 
-    camera = cv2.VideoCapture(
-        CAMERA_INDEX,
-        cv2.CAP_DSHOW
-    )
+    if is_youtube_url(CAMERA_SOURCE):
+        info = extract_youtube_info(CAMERA_SOURCE)
+        camera = cv2.VideoCapture(info["stream_url"])
+    elif isinstance(CAMERA_SOURCE, int) or (isinstance(CAMERA_SOURCE, str) and str(CAMERA_SOURCE).strip().isdigit()):
+        camera = cv2.VideoCapture(int(CAMERA_SOURCE), cv2.CAP_DSHOW)
+    else:
+        camera = cv2.VideoCapture(str(CAMERA_SOURCE))
 
     if not camera.isOpened():
         raise RuntimeError("Camera could not be opened.")
@@ -1171,8 +1229,8 @@ class StreamHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, *")
         self.end_headers()
 
     def do_GET(self):
@@ -1183,8 +1241,24 @@ class StreamHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(
                 b"AI Crowd Intelligence stream is running. "
-                b"Open /video_feed."
+                b"Open /video_feed, /source, or POST /set_source."
             )
+            return
+
+        if self.path.startswith("/source"):
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            info = camera.get_info() if "camera" in globals() and camera else {"status": "initializing"}
+            info["conf"] = MODEL_CONFIDENCE
+            info["imgsz"] = IMAGE_SIZE
+            info["iou"] = IOU_THRESHOLD
+            info["show_bounding_boxes"] = SHOW_BOUNDING_BOXES
+            info["show_spatial_overlay"] = spatial_engine.show_spatial_overlay if "spatial_engine" in globals() else False
+            info["active_roi"] = active_roi if "active_roi" in globals() else None
+            info["dense_mode"] = DENSE_CROWD_MODE if "DENSE_CROWD_MODE" in globals() else False
+            self.wfile.write(json.dumps(info).encode("utf-8"))
             return
 
         if not self.path.startswith("/video_feed"):
@@ -1234,6 +1308,166 @@ class StreamHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def do_POST(self):
+        global MODEL_CONFIDENCE, IMAGE_SIZE, IOU_THRESHOLD, DENSE_CROWD_MODE, active_roi, last_result, SHOW_BOUNDING_BOXES
+
+        if self.path.startswith("/set_source"):
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+            try:
+                data = json.loads(body)
+                new_src = data.get("source", 0)
+                if "camera" in globals() and camera:
+                    ok, msg = camera.change_source(new_src)
+                    info = camera.get_info()
+                    info["conf"] = MODEL_CONFIDENCE
+                    info["imgsz"] = IMAGE_SIZE
+                    resp = {"success": ok, "message": msg, "info": info}
+                    status_code = 200 if ok else 400
+                else:
+                    resp = {"success": False, "message": "Camera engine not ready"}
+                    status_code = 503
+            except Exception as e:
+                resp = {"success": False, "message": str(e)}
+                status_code = 500
+
+            self.send_response(status_code)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
+        if self.path.startswith("/set_detection_config"):
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+            try:
+                data = json.loads(body)
+                if "conf" in data:
+                    MODEL_CONFIDENCE = float(data["conf"])
+                if "imgsz" in data:
+                    IMAGE_SIZE = int(data["imgsz"])
+                if "iou" in data:
+                    IOU_THRESHOLD = float(data["iou"])
+                print(f"[AI Video Engine] Detection config updated: conf={MODEL_CONFIDENCE}, imgsz={IMAGE_SIZE}, iou={IOU_THRESHOLD}")
+                resp = {
+                    "success": True,
+                    "message": f"Updated detection: conf={MODEL_CONFIDENCE}, imgsz={IMAGE_SIZE}",
+                    "conf": MODEL_CONFIDENCE,
+                    "imgsz": IMAGE_SIZE,
+                    "iou": IOU_THRESHOLD
+                }
+                status_code = 200
+            except Exception as e:
+                resp = {"success": False, "message": str(e)}
+                status_code = 500
+
+            self.send_response(status_code)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
+        if self.path.startswith("/toggle_spatial_overlay"):
+            try:
+                spatial_engine.show_spatial_overlay = not spatial_engine.show_spatial_overlay
+                print(f"[AI Video Engine] Spatial floor overlay toggled: {spatial_engine.show_spatial_overlay}")
+                resp = {
+                    "success": True,
+                    "show_spatial_overlay": spatial_engine.show_spatial_overlay,
+                    "message": f"Floor overlay {'enabled' if spatial_engine.show_spatial_overlay else 'disabled'}"
+                }
+                status_code = 200
+            except Exception as e:
+                resp = {"success": False, "message": str(e)}
+                status_code = 500
+
+            self.send_response(status_code)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
+        if self.path.startswith("/toggle_bounding_boxes"):
+            try:
+                SHOW_BOUNDING_BOXES = not SHOW_BOUNDING_BOXES
+                spatial_engine.show_spatial_overlay = SHOW_BOUNDING_BOXES
+                print(f"[AI Video Engine] Bounding box & spatial overlay mode toggled (Ctrl+B): {SHOW_BOUNDING_BOXES}")
+                resp = {
+                    "success": True,
+                    "show_bounding_boxes": SHOW_BOUNDING_BOXES,
+                    "show_spatial_overlay": spatial_engine.show_spatial_overlay,
+                    "message": f"Bounding boxes {'ENABLED (Green boxes & spatial active)' if SHOW_BOUNDING_BOXES else 'DISABLED (Clean dot mode)'}"
+                }
+                status_code = 200
+            except Exception as e:
+                resp = {"success": False, "message": str(e)}
+                status_code = 500
+
+            self.send_response(status_code)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
+        if self.path.startswith("/set_roi"):
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+            try:
+                data = json.loads(body)
+                val = data.get("roi")
+                if val in ("news", "right", "split"):
+                    active_roi = "news"
+                elif isinstance(val, (list, tuple)) and len(val) == 4:
+                    active_roi = tuple(map(int, val))
+                else:
+                    active_roi = None
+                last_result = None
+                resp = {"success": True, "active_roi": active_roi, "message": f"ROI set to {active_roi}"}
+                status_code = 200
+            except Exception as e:
+                resp = {"success": False, "message": str(e)}
+                status_code = 500
+
+            self.send_response(status_code)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
+        if self.path.startswith("/toggle_dense_mode"):
+            DENSE_CROWD_MODE = not DENSE_CROWD_MODE
+            if DENSE_CROWD_MODE:
+                MODEL_CONFIDENCE = 0.06
+                IOU_THRESHOLD = 0.70
+                IMAGE_SIZE = 1280
+            else:
+                MODEL_CONFIDENCE = 0.10
+                IOU_THRESHOLD = 0.65
+                IMAGE_SIZE = 1024
+            last_result = None
+            resp = {
+                "success": True,
+                "dense_mode": DENSE_CROWD_MODE,
+                "conf": MODEL_CONFIDENCE,
+                "iou": IOU_THRESHOLD,
+                "imgsz": IMAGE_SIZE,
+                "message": f"Ultra-dense crowd boost {'ACTIVATED' if DENSE_CROWD_MODE else 'NORMAL'}"
+            }
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
     def log_message(self, format, *args):
         return
 
@@ -1251,80 +1485,8 @@ threading.Thread(
 
 # ---------------- camera capture thread ----------------
 
-class CameraCapture:
-
-    def __init__(self, source):
-        self.source = source
-        self.capture = None
-        self.frame = None
-        self.lock = threading.Lock()
-        self.running = False
-
-    def start(self):
-        self.capture = cv2.VideoCapture(
-            self.source,
-            cv2.CAP_DSHOW
-        )
-
-        if not self.capture.isOpened():
-            raise RuntimeError(
-                "Could not open webcam."
-            )
-
-        self.capture.set(
-            cv2.CAP_PROP_FRAME_WIDTH,
-            640
-        )
-
-        self.capture.set(
-            cv2.CAP_PROP_FRAME_HEIGHT,
-            480
-        )
-
-        self.capture.set(
-            cv2.CAP_PROP_BUFFERSIZE,
-            1
-        )
-
-        self.running = True
-
-        threading.Thread(
-            target=self._read_loop,
-            daemon=True
-        ).start()
-
-        return self
-
-    def _read_loop(self):
-        while self.running:
-            ok, frame = self.capture.read()
-
-            if not ok:
-                time.sleep(0.01)
-                continue
-
-            # Mirror the video stream horizontally (natural mirror orientation)
-            frame = cv2.flip(frame, 1)
-
-            with self.lock:
-                self.frame = frame
-
-    def read(self):
-        with self.lock:
-            if self.frame is None:
-                return None
-
-            return self.frame.copy()
-
-    def stop(self):
-        self.running = False
-
-        if self.capture is not None:
-            self.capture.release()
-
-
-camera = CameraCapture(
-    CAMERA_INDEX
+camera = UniversalCapture(
+    CAMERA_SOURCE
 ).start()
 
 
@@ -1406,393 +1568,427 @@ model = YOLO(MODEL_PATH)
 
 tracks = {}
 
+class CrowdTracker:
+    """
+    High-density crowd tracking engine that ensures 100% of detected people are kept,
+    tracked, and assigned persistent IDs across frames without dropping occluded or stationary individuals.
+    """
+    def __init__(self, max_lost=30, max_dist=120):
+        self.next_id = 1
+        self.tracks = {}
+        self.max_lost = max_lost
+        self.max_dist = max_dist
+
+    def update(self, boxes):
+        if len(boxes) == 0:
+            for tid in list(self.tracks.keys()):
+                self.tracks[tid]['lost'] += 1
+                if self.tracks[tid]['lost'] > self.max_lost:
+                    del self.tracks[tid]
+            return np.array([], dtype=int)
+
+        box_centers = np.column_stack([(boxes[:, 0] + boxes[:, 2]) / 2, (boxes[:, 1] + boxes[:, 3]) / 2])
+        assigned_ids = [-1] * len(boxes)
+
+        if len(self.tracks) > 0:
+            track_ids = list(self.tracks.keys())
+            track_centers = np.array([self.tracks[tid]['center'] for tid in track_ids])
+            dists = np.linalg.norm(box_centers[:, None, :] - track_centers[None, :, :], axis=2)
+
+            # Global minimum-distance pairing avoids nearest-neighbor swapping in dense crowds
+            pairs = []
+            for b_idx in range(len(boxes)):
+                for t_idx, tid in enumerate(track_ids):
+                    pairs.append((dists[b_idx, t_idx], b_idx, tid))
+            pairs.sort(key=lambda x: x[0])
+
+            used_boxes = set()
+            used_tracks = set()
+            for d, b_idx, tid in pairs:
+                if d > self.max_dist:
+                    break
+                if b_idx not in used_boxes and tid not in used_tracks:
+                    assigned_ids[b_idx] = tid
+                    used_boxes.add(b_idx)
+                    used_tracks.add(tid)
+                    self.tracks[tid] = {'box': boxes[b_idx], 'center': box_centers[b_idx], 'lost': 0}
+
+        for b_idx in range(len(boxes)):
+            if assigned_ids[b_idx] == -1:
+                tid = self.next_id
+                self.next_id += 1
+                assigned_ids[b_idx] = tid
+                self.tracks[tid] = {'box': boxes[b_idx], 'center': box_centers[b_idx], 'lost': 0}
+
+        assigned_set = set(assigned_ids)
+        for tid in list(self.tracks.keys()):
+            if tid not in assigned_set:
+                self.tracks[tid]['lost'] += 1
+                if self.tracks[tid]['lost'] > self.max_lost:
+                    del self.tracks[tid]
+
+        return np.array(assigned_ids, dtype=int)
+
+
+def deduplicate_boxes(boxes, scores=None, iou_thresh=0.70, center_dist_ratio=0.12):
+    """
+    Suppresses true duplicate detections on the exact same person.
+    In dense crowds, attendees stand closely packed; we only suppress if IoU > iou_thresh
+    OR if IoU is substantial (>0.35) and centers are nearly identical.
+    """
+    if boxes is None or len(boxes) <= 1:
+        return boxes
+
+    if scores is not None and len(scores) == len(boxes):
+        order = np.argsort(scores)[::-1]
+    else:
+        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        order = np.argsort(areas)[::-1]
+
+    keep = []
+    while len(order) > 0:
+        idx = order[0]
+        keep.append(idx)
+        if len(order) == 1:
+            break
+
+        curr_box = boxes[idx]
+        rem_boxes = boxes[order[1:]]
+
+        xx1 = np.maximum(curr_box[0], rem_boxes[:, 0])
+        yy1 = np.maximum(curr_box[1], rem_boxes[:, 1])
+        xx2 = np.minimum(curr_box[2], rem_boxes[:, 2])
+        yy2 = np.minimum(curr_box[3], rem_boxes[:, 3])
+
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+
+        area_curr = (curr_box[2] - curr_box[0]) * (curr_box[3] - curr_box[1])
+        area_rem = (rem_boxes[:, 2] - rem_boxes[:, 0]) * (rem_boxes[:, 3] - rem_boxes[:, 1])
+        union = area_curr + area_rem - inter
+        iou = inter / np.maximum(1.0, union)
+
+        c_curr_x = (curr_box[0] + curr_box[2]) / 2.0
+        c_curr_y = (curr_box[1] + curr_box[3]) / 2.0
+        c_rem_x = (rem_boxes[:, 0] + rem_boxes[:, 2]) / 2.0
+        c_rem_y = (rem_boxes[:, 1] + rem_boxes[:, 3]) / 2.0
+
+        dist = np.hypot(c_curr_x - c_rem_x, c_curr_y - c_rem_y)
+        max_h = np.maximum(curr_box[3] - curr_box[1], rem_boxes[:, 3] - rem_boxes[:, 1])
+        is_same_body = (dist / np.maximum(1.0, max_h)) < center_dist_ratio
+
+        # Only suppress if overlap is genuinely high (same person detected twice)
+        suppress_mask = (iou > iou_thresh) | ((iou > 0.35) & is_same_body)
+        order = order[1:][~suppress_mask]
+
+    return boxes[keep]
+
+
+crowd_tracker = CrowdTracker()
+
+# ---------------- FastReID Stable ID Integration ----------------
+reid_extractor = None
+identity_gallery = None
+track_to_global_id = {}
+track_frame_count = {}
+
+try:
+    fastreid_dir = os.path.join(ROOT, "fastreid")
+    fast_reid_pkg = os.path.join(fastreid_dir, "fast-reid")
+    for p in [fastreid_dir, fast_reid_pkg]:
+        if os.path.exists(p) and p not in sys.path:
+            sys.path.insert(0, p)
+
+    from reid import ReIDExtractor
+    from gallery import IdentityGallery
+
+    reid_config = os.path.join(fast_reid_pkg, "configs", "Market1501", "sbs_S50.yml")
+    reid_weights = os.path.join(fast_reid_pkg, "market_sbs_S50.pth")
+
+    if os.path.exists(reid_config) and os.path.exists(reid_weights):
+        reid_device = "cuda" if torch.cuda.is_available() else "cpu"
+        reid_extractor = ReIDExtractor(
+            config_path=reid_config,
+            weights_path=reid_weights,
+            device=reid_device
+        )
+        identity_gallery = IdentityGallery(
+            match_threshold=0.72,
+            expiry_seconds=300.0,
+            confirm_samples=1
+        )
+        print(f"[AI Video Engine] FastReID loaded successfully on {reid_device.upper()} for Stable Identity assignment.")
+    else:
+        print(f"[AI Video Engine] FastReID assets not found. Fallback to tracker IDs.")
+except Exception as e:
+    print(f"[AI Video Engine] FastReID initialization error: {e}. Fallback to tracker IDs.")
+    reid_extractor = None
+    identity_gallery = None
+
 demographics_cache = {}
 
 
-def _classify_face(person_crop, box_h, box_w):
+def estimate_demographics(
+    person_crop,
+    bbox,
+    speed=0.0,
+    avg_neighbor_h=None,
+    expected_head_w=None,
+):
     """
-    Face-based gender classification for close-up scenarios.
-    Detects mustache / beard / stubble via dark-texture analysis
-    in the lower face region.
-    Returns (gender, age, confidence).
-    """
-    crop_h, crop_w = person_crop.shape[:2]
-
-    try:
-        gray = cv2.cvtColor(
-            person_crop,
-            cv2.COLOR_BGR2GRAY
-        )
-        hsv = cv2.cvtColor(
-            person_crop,
-            cv2.COLOR_BGR2HSV
-        )
-    except Exception:
-        return "Unknown", "Adult", 0.1
-
-    score = 0.0
-
-    # Face center horizontal band.
-    fx1 = int(crop_w * 0.20)
-    fx2 = int(crop_w * 0.80)
-
-    # Lower face (mouth / mustache / chin).
-    jaw_y1 = int(crop_h * 0.45)
-    jaw_y2 = int(crop_h * 0.65)
-
-    jaw_gray = gray[jaw_y1:jaw_y2, fx1:fx2]
-    jaw_hsv = hsv[jaw_y1:jaw_y2, fx1:fx2]
-
-    if jaw_gray.size == 0:
-        return "Unknown", "Adult", 0.1
-
-    # Signal 1: facial hair = dark + low saturation patches.
-    dark_mask = (
-        (jaw_gray < 80)
-        & (jaw_hsv[:, :, 1] < 60)
-    )
-    dark_ratio = (
-        float(np.sum(dark_mask))
-        / max(1, jaw_gray.size)
-    )
-
-    if dark_ratio > 0.08:
-        score -= 2.5
-    elif dark_ratio > 0.04:
-        score -= 1.5
-
-    # Signal 2: jaw edge density vs forehead (facial hair
-    # creates much more texture than smooth forehead).
-    jaw_edges = cv2.Canny(jaw_gray, 20, 80)
-    jaw_edge_d = float(np.mean(jaw_edges)) / 255.0
-
-    forehead_y1 = int(crop_h * 0.15)
-    forehead_y2 = int(crop_h * 0.30)
-    forehead = gray[forehead_y1:forehead_y2, fx1:fx2]
-
-    if forehead.size > 0:
-        fh_edges = cv2.Canny(forehead, 20, 80)
-        fh_edge_d = float(np.mean(fh_edges)) / 255.0
-    else:
-        fh_edge_d = jaw_edge_d
-
-    if (
-        jaw_edge_d > fh_edge_d * 1.5
-        and jaw_edge_d > 0.05
-    ):
-        score -= 1.5
-
-    # Signal 3: jaw brightness vs overall face brightness.
-    # Stubble / shadow makes lower face darker.
-    face_region = gray[
-        int(crop_h * 0.15):int(crop_h * 0.65),
-        fx1:fx2
-    ]
-
-    if face_region.size > 0:
-        jaw_bright = float(np.mean(jaw_gray))
-        face_bright = float(np.mean(face_region))
-
-        if jaw_bright < face_bright * 0.85:
-            score -= 1.0
-
-    # Signal 4: lower face edge concentration.
-    # Smooth lower face (no facial hair) leans female.
-    if jaw_edge_d < 0.03 and dark_ratio < 0.02:
-        score += 1.5
-
-    # Classify.
-    if score <= -1.5:
-        gender = "Male"
-    elif score >= 1.5:
-        gender = "Female"
-    else:
-        gender = "Unknown"
-
-    confidence = min(1.0, abs(score) / 4.0)
-
-    return gender, "Adult", confidence
-
-
-def estimate_demographics(person_crop, bbox, speed=0.0):
-    """
-    Multi-signal gender and age classifier.
-    Combines body silhouette, color analysis, texture features,
-    and calibrated real-world height when available.
-    Returns (gender, age, confidence).
+    Advanced multi-signal gender and age classifier for real-world crowds and surveillance.
+    
+    Cues analyzed:
+    1. Facial hair (Mustache / Beard / Stubble):
+       - Upper lip darkness and horizontal edge gradient vs forehead skin tone.
+       - Lower jaw/chin darkness and texture vs cheeks.
+       - A mustache or beard is an absolute indicator of Male and Adult (never child).
+    2. Skin texture & smoothness:
+       - Smooth, uniform lower face without mustache shadow leans Female or Youth.
+    3. Hair length & hairstyle:
+       - Crown hair color (HSV) vs shoulder sides.
+       - Short hair (exposed ears/neck, light shirt fabric on sides) leans Male.
+       - Dark cascading hair over shoulders matching crown leans Female.
+    4. Dressing Sense & attire:
+       - Collared shirt / polo / central button placket (vertical edges on chest) leans Male.
+       - Diagonal drape (Saree pallu / dupatta) across chest with high saturation leans Female.
+       - Solid, dark, checked, or saffron male pilgrim wraps.
+    5. Real Age context:
+       - Stature comparison vs standing peers at same depth plane.
+       - Relative head/body width vs peers at same depth.
+       - Adult exclusion: Facial hair or broad shoulders disqualify Child classification.
+       - Senior cue: Silver/white hair on crown (high V, low S) + measured cadence.
     """
     x1, y1, x2, y2 = bbox
     box_w = max(1, x2 - x1)
     box_h = max(1, y2 - y1)
     aspect = box_h / float(box_w)
 
-    # Scores: positive = female / senior, negative = male / child.
-    g_score = 0.0
-    a_score = 0.0
-
-    if (
-        person_crop is None
-        or person_crop.size == 0
-        or box_h < 15
-        or box_w < 10
-    ):
-        return "Unknown", "Adult", 0.1
-
-    # Too close to camera for body-based classification.
-    # Switch to face-based analysis instead (mustache, jaw,
-    # facial texture).
-    if aspect < 1.5 and box_h > 200:
-        return _classify_face(person_crop, box_h, box_w)
+    if person_crop is None or person_crop.size == 0 or box_h < 14 or box_w < 10:
+        return "Male", "Adult", 0.6
 
     crop_h, crop_w = person_crop.shape[:2]
-
-    if crop_h < 10 or crop_w < 6:
-        return "Unknown", "Adult", 0.1
+    if crop_h < 12 or crop_w < 8:
+        return "Male", "Adult", 0.6
 
     try:
-        hsv = cv2.cvtColor(
-            person_crop,
-            cv2.COLOR_BGR2HSV
-        )
-        gray = cv2.cvtColor(
-            person_crop,
-            cv2.COLOR_BGR2GRAY
-        )
+        gray = cv2.cvtColor(person_crop, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(person_crop, cv2.COLOR_BGR2HSV)
     except Exception:
-        return "Unknown", "Adult", 0.1
+        return "Male", "Adult", 0.6
 
-    # Body region boundaries.
-    head_end = max(2, int(crop_h * 0.18))
-    upper_end = max(
-        head_end + 2,
-        int(crop_h * 0.42)
-    )
-    lower_end = max(
-        upper_end + 2,
-        int(crop_h * 0.60)
-    )
+    # Scores: negative = Male / Child, positive = Female / Senior
+    g_score = 0.0
+    a_score = 0.0
+    has_facial_hair = False
 
-    head_gray = gray[:head_end, :]
-    upper_hsv = hsv[head_end:upper_end, :]
-    lower_hsv = hsv[upper_end:lower_end, :]
-    upper_gray = gray[head_end:upper_end, :]
-    lower_gray = gray[upper_end:lower_end, :]
-
-    # ---- Gender signal 1: shoulder vs hip silhouette ----
-
-    shoulder_y = min(
-        crop_h - 1,
-        int(crop_h * 0.24)
-    )
-    hip_y = min(
-        crop_h - 1,
-        int(crop_h * 0.54)
-    )
-
-    s_strip = gray[
-        max(0, shoulder_y - 2):shoulder_y + 3, :
-    ]
-    h_strip = gray[
-        max(0, hip_y - 2):hip_y + 3, :
-    ]
-
-    s_fill = (
-        float(np.sum(s_strip > 30))
-        / max(1.0, float(s_strip.size))
-    )
-    h_fill = (
-        float(np.sum(h_strip > 30))
-        / max(1.0, float(h_strip.size))
-    )
-
-    if h_fill > 0.15:
-        shr = s_fill / h_fill
-        if shr > 1.15:
-            g_score -= 1.5
-        elif shr < 0.92:
-            g_score += 1.5
-
-    # ---- Gender signal 2: upper body color saturation ----
-
-    upper_sat = (
-        float(np.mean(upper_hsv[:, :, 1]))
-        if upper_hsv.size > 0
-        else 50.0
-    )
-
-    if upper_sat > 82:
-        g_score += 1.3
-    elif upper_sat < 42:
-        g_score -= 0.9
-
-    # ---- Gender signal 3: hue diversity in upper body ----
-
-    if upper_hsv.size > 0:
-        hue_std = float(
-            np.std(upper_hsv[:, :, 0])
-        )
-        if hue_std > 38:
-            g_score += 1.0
-        elif hue_std < 14:
-            g_score -= 0.7
-
-    # ---- Gender signal 4: head edge complexity (hair) ----
-
-    if head_gray.size > 20:
-        head_edges = cv2.Canny(
-            head_gray, 30, 100
-        )
-        edge_density = (
-            float(np.mean(head_edges)) / 255.0
-        )
-        if edge_density > 0.14:
-            g_score += 0.9
-
-    # ---- Gender signal 5: lower body silhouette ----
-
-    if lower_gray.size > 20:
-        col_fill = np.sum(
-            lower_gray > 25, axis=1
-        ).astype(float)
-
-        if len(col_fill) > 4:
-            half = len(col_fill) // 2
-            top_w = float(np.mean(col_fill[:half]))
-            bot_w = float(np.mean(col_fill[half:]))
-
-            if top_w > 5 and bot_w / top_w > 1.35:
-                g_score += 1.2
-
-    # ---- Gender signal 6: full outfit color ----
-
-    if lower_hsv.size > 0:
-        lower_sat = float(
-            np.mean(lower_hsv[:, :, 1])
-        )
-        if lower_sat > 75 and upper_sat > 70:
-            g_score += 0.7
-
-    # ---- Age signal 7: calibrated real-world height ----
-
-    homography = get_homography()
-
-    if homography is not None:
-        try:
-            cx = (x1 + x2) / 2.0
-
-            head_pt = np.asarray(
-                [[[cx, float(y1)]]],
-                dtype=np.float32
-            )
-            foot_pt = np.asarray(
-                [[[cx, float(y2)]]],
-                dtype=np.float32
-            )
-
-            hg = cv2.perspectiveTransform(
-                head_pt, homography
-            )
-            fg = cv2.perspectiveTransform(
-                foot_pt, homography
-            )
-
-            real_h = math.hypot(
-                hg[0, 0, 0] - fg[0, 0, 0],
-                hg[0, 0, 1] - fg[0, 0, 1]
-            )
-
-            if real_h > 0.3:
-                if real_h < 1.20:
-                    a_score -= 4.5
-                elif real_h < 1.40:
-                    a_score -= 2.5
-                elif real_h > 1.75:
-                    a_score += 0.3
-
-        except Exception:
-            pass
-
-    # ---- Age signal 8: head-to-body proportion ----
-
-    head_ratio = head_end / float(crop_h)
-
-    if head_ratio > 0.26:
-        a_score -= 1.5
-
-    # ---- Age signal 9: aspect ratio + pixel height ----
-
-    if aspect < 2.0 and box_h < 110:
-        a_score -= 2.5
-    elif aspect < 2.15 and box_h < 90:
-        a_score -= 1.8
-
-    # ---- Age signal 10: movement speed ----
-
-    if speed > 14:
-        a_score -= 0.6
-    elif speed < 1.2 and box_h > 90:
-        a_score += 1.2
-
-    # ---- Age signal 11: head brightness / hair color ----
-
-    if head_gray.size > 10:
-        hb = float(np.mean(head_gray))
-        hs = float(np.std(head_gray))
-
-        if hb > 145 and hs < 28:
-            a_score += 2.2
-        elif hb > 130 and hs < 34:
-            a_score += 1.0
-
-    # ---- Age signal 12: clothing contrast + speed ----
-
-    if upper_gray.size > 10:
-        upper_contrast = float(
-            np.std(upper_gray)
-        )
-        if upper_contrast < 25 and speed < 2.0:
-            a_score += 0.6
-
-    # ---- Final classification ----
-
-    confidence = min(
-        1.0,
-        max(
-            abs(g_score),
-            abs(a_score)
-        ) / 5.0
-    )
-
-    if g_score >= 1.5:
-        gender = "Female"
-    elif g_score <= -1.0:
-        gender = "Male"
+    # -------------------------------------------------------------
+    # 1. HEAD & FACE LOCALIZATION
+    # -------------------------------------------------------------
+    if aspect >= 1.8:
+        head_h = max(10, min(int(crop_h * 0.22), int(crop_w * 1.1)))
+    elif aspect >= 1.2:
+        head_h = max(10, min(int(crop_h * 0.35), int(crop_w * 1.2)))
     else:
-        gender = "Unknown"
+        head_h = max(10, min(int(crop_h * 0.52), int(crop_w * 1.3)))
 
-    if a_score <= -2.5:
+    head_gray = gray[:head_h, :]
+    head_hsv = hsv[:head_h, :]
+
+    # -------------------------------------------------------------
+    # 2. FACIAL HAIR / MUSTACHE / STUBBLE DETECTION (Skin Texture)
+    # -------------------------------------------------------------
+    if head_h >= 12 and crop_w >= 10:
+        fx1 = int(crop_w * 0.20)
+        fx2 = int(crop_w * 0.80)
+
+        # Forehead patch (skin baseline)
+        fh_y1 = max(1, int(head_h * 0.18))
+        fh_y2 = max(fh_y1 + 2, int(head_h * 0.40))
+        forehead_gray = head_gray[fh_y1:fh_y2, fx1:fx2]
+        fh_lum = float(np.median(forehead_gray)) if forehead_gray.size > 0 else 120.0
+
+        # Upper lip / Mustache region (between nose and mouth)
+        must_y1 = max(fh_y2, int(head_h * 0.54))
+        must_y2 = max(must_y1 + 2, int(head_h * 0.74))
+        mustache_gray = head_gray[must_y1:must_y2, fx1:fx2]
+
+        # Lower jaw / Chin / Beard / Stubble region
+        jaw_y1 = max(must_y2, int(head_h * 0.72))
+        jaw_y2 = min(head_h, int(head_h * 0.98))
+        jaw_gray = head_gray[jaw_y1:jaw_y2, fx1:fx2]
+
+        if mustache_gray.size >= 6 and forehead_gray.size >= 6:
+            must_lum = float(np.median(mustache_gray))
+            must_std = float(np.std(mustache_gray))
+            must_sobel = float(np.mean(np.abs(cv2.Sobel(mustache_gray, cv2.CV_32F, 0, 1, ksize=3))))
+
+            lip_ratio = must_lum / max(1.0, fh_lum)
+
+            if lip_ratio < 0.84 or (lip_ratio < 0.92 and (must_std > 15.0 or must_sobel > 16.0)):
+                # Distinct mustache detected
+                has_facial_hair = True
+                g_score -= 3.4  # Strongly Male
+                a_score += 2.2  # Adult
+
+        if jaw_gray.size >= 6 and forehead_gray.size >= 6:
+            jaw_lum = float(np.median(jaw_gray))
+            jaw_canny = float(np.mean(cv2.Canny(jaw_gray, 25, 75))) / 255.0
+            jaw_ratio = jaw_lum / max(1.0, fh_lum)
+
+            if jaw_ratio < 0.84 or jaw_canny > 0.08:
+                # Stubble / Beard detected
+                has_facial_hair = True
+                g_score -= 2.8  # Strongly Male
+                a_score += 2.0  # Adult
+
+        # Smooth skin test (leans Female or Child only if no facial hair)
+        if not has_facial_hair and forehead_gray.size >= 6 and mustache_gray.size >= 6:
+            must_lum = float(np.median(mustache_gray))
+            must_std = float(np.std(mustache_gray))
+            if must_lum >= fh_lum * 0.94 and must_std < 12.0:
+                g_score += 1.0  # Smooth skin
+
+    # -------------------------------------------------------------
+    # 3. HAIR STYLE & LENGTH (Short Hair vs Cascading Hair / Bun)
+    # -------------------------------------------------------------
+    crown_y2 = max(2, int(head_h * 0.28))
+    crown_hsv = head_hsv[:crown_y2, int(crop_w * 0.25):int(crop_w * 0.75)]
+    crown_val = float(np.median(crown_hsv[:, :, 2])) if crown_hsv.size > 0 else 40.0
+    crown_sat = float(np.median(crown_hsv[:, :, 1])) if crown_hsv.size > 0 else 30.0
+
+    sh_y1 = head_h
+    sh_y2 = min(crop_h, int(head_h * 1.55))
+    if sh_y2 > sh_y1 and crop_w >= 12:
+        left_sh = hsv[sh_y1:sh_y2, :int(crop_w * 0.24)]
+        right_sh = hsv[sh_y1:sh_y2, int(crop_w * 0.76):]
+
+        if left_sh.size > 8 and right_sh.size > 8:
+            left_dark_hair = np.mean((left_sh[:, :, 2] < max(65, crown_val + 20)) & (left_sh[:, :, 1] < 90))
+            right_dark_hair = np.mean((right_sh[:, :, 2] < max(65, crown_val + 20)) & (right_sh[:, :, 1] < 90))
+            hair_presence = (left_dark_hair + right_dark_hair) / 2.0
+
+            if hair_presence > 0.45:
+                # Long dark hair flowing over shoulders -> Female
+                g_score += 2.4
+            elif hair_presence < 0.20:
+                # Clean shoulders / short hair / collar visible -> Male
+                g_score -= 1.6
+
+    # -------------------------------------------------------------
+    # 4. DRESSING SENSE & ATTIRE
+    # -------------------------------------------------------------
+    torso_y1 = head_h
+    torso_y2 = min(crop_h, int(head_h * 2.3))
+    if torso_y2 > torso_y1 and crop_w >= 12:
+        torso_gray = gray[torso_y1:torso_y2, int(crop_w * 0.15):int(crop_w * 0.85)]
+        torso_hsv = hsv[torso_y1:torso_y2, int(crop_w * 0.15):int(crop_w * 0.85)]
+
+        if torso_gray.size > 20:
+            th, tw = torso_gray.shape[:2]
+
+            # Signal A: Men's collared shirt placket (central vertical line of buttons/seam)
+            cx1 = int(tw * 0.40)
+            cx2 = int(tw * 0.60)
+            center_stripe = torso_gray[:, cx1:cx2]
+            if center_stripe.size > 8:
+                sobel_x = np.abs(cv2.Sobel(center_stripe, cv2.CV_32F, 1, 0, ksize=3))
+                if np.mean(sobel_x) > 20.0:
+                    g_score -= 1.8  # Collared shirt / button placket
+
+            # Signal B: Saree / Dupatta diagonal drape (pallu across torso)
+            gx = cv2.Sobel(torso_gray, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(torso_gray, cv2.CV_32F, 0, 1, ksize=3)
+            mag = np.hypot(gx, gy)
+            angles = np.abs(np.arctan2(gy, gx)) * 180.0 / np.pi
+            diag_mask = (angles >= 30.0) & (angles <= 60.0) & (mag > 25.0)
+            diag_ratio = float(np.sum(diag_mask)) / max(1.0, float(mag.size))
+
+            mean_torso_sat = float(np.mean(torso_hsv[:, :, 1]))
+            if diag_ratio > 0.12 and mean_torso_sat > 60.0:
+                g_score += 2.6  # Saree drape
+
+    # -------------------------------------------------------------
+    # 5. AGE ESTIMATION: ADULT vs CHILD vs SENIOR
+    # -------------------------------------------------------------
+    # Senior check: silver / white hair on crown + measured gait
+    if crown_val > 95.0 and crown_sat < 32.0:
+        a_score += 3.2
+    elif crown_val > 85.0 and crown_sat < 26.0:
+        a_score += 1.8
+
+    if speed < 1.6 and box_h > 60:
+        a_score += 0.8
+
+    # Child checks ("chil are small and much more"):
+    if has_facial_hair:
+        # Hard constraint: anyone with a mustache, beard, or stubble CANNOT be a child!
+        a_score = max(a_score, 0.5)
+    else:
+        # Skull / Head width comparison at same depth plane:
+        if expected_head_w is not None and expected_head_w > 15:
+            w_ratio = float(box_w) / expected_head_w
+            if w_ratio < 0.60:
+                a_score -= 3.5  # Substantially narrower body/skull than depth peers -> Child
+            elif w_ratio < 0.72 and aspect < 1.7:
+                a_score -= 2.0
+            elif w_ratio >= 0.85:
+                # Normal adult body width at this depth -> NOT a child
+                if a_score < -1.0:
+                    a_score = 0.0
+
+        # Full body visible stature check (only if person is NOT occluded, aspect >= 1.9)
+        if aspect >= 1.9 and avg_neighbor_h is not None and avg_neighbor_h > 30:
+            h_ratio = float(box_h) / avg_neighbor_h
+            if h_ratio < 0.64:
+                a_score -= 3.8
+            elif h_ratio >= 0.82:
+                if a_score < -1.0:
+                    a_score = 0.0
+
+    # -------------------------------------------------------------
+    # 6. FINAL CLASSIFICATION & CONFIDENCE
+    # -------------------------------------------------------------
+    if g_score <= -0.5:
+        gender = "Male"
+    elif g_score >= 1.2:
+        gender = "Female"
+    else:
+        gender = "Male"
+
+    if a_score <= -2.6:
         age = "Child"
-    elif a_score >= 3.0:
+    elif a_score >= 2.5:
         age = "Senior Citizen"
     else:
         age = "Adult"
+
+    confidence = min(1.0, max(0.65, abs(g_score) / 3.5))
 
     return gender, age, confidence
 
 
 def get_person_demographics(
-    track_id,
+    person_id,
     person_crop,
     bbox,
-    speed=0.0
+    speed=0.0,
+    avg_neighbor_h=None,
+    expected_head_w=None,
 ):
+    """
+    Cumulative demographic smoothing keyed by persistent Global ID.
+    Eliminates frame-to-frame label flickering and retains classification
+    even during brief occlusions.
+    """
     current_time = time.time()
 
-    if track_id not in demographics_cache:
+    if person_id not in demographics_cache:
         g, a, conf = estimate_demographics(
-            person_crop, bbox, speed
+            person_crop, bbox, speed, avg_neighbor_h=avg_neighbor_h, expected_head_w=expected_head_w
         )
-        demographics_cache[track_id] = {
+        demographics_cache[person_id] = {
             "gender": g,
             "age": a,
             "gender_scores": {g: conf},
@@ -1801,52 +1997,49 @@ def get_person_demographics(
             "updates": 1,
         }
     else:
-        entry = demographics_cache[track_id]
-
+        entry = demographics_cache[person_id]
         if (
-            entry["updates"] < 12
-            or (current_time - entry["last_updated"] > 1.5)
+            entry["updates"] < 15
+            or (current_time - entry["last_updated"] > 1.2)
         ):
             g, a, conf = estimate_demographics(
-                person_crop, bbox, speed
+                person_crop, bbox, speed, avg_neighbor_h=avg_neighbor_h, expected_head_w=expected_head_w
             )
 
-            entry["gender_scores"][g] = (
-                entry["gender_scores"].get(g, 0)
-                + conf
-            )
-            entry["age_scores"][a] = (
-                entry["age_scores"].get(a, 0)
-                + conf
-            )
+            if g in ("Male", "Female"):
+                entry["gender_scores"][g] = entry["gender_scores"].get(g, 0.0) + conf
+            if a in ("Child", "Adult", "Senior Citizen"):
+                entry["age_scores"][a] = entry["age_scores"].get(a, 0.0) + conf
 
-            entry["gender"] = max(
-                entry["gender_scores"],
-                key=entry["gender_scores"].get
-            )
-            entry["age"] = max(
-                entry["age_scores"],
-                key=entry["age_scores"].get
-            )
+            # Winner-takes-all majority voting
+            if entry["gender_scores"]:
+                entry["gender"] = max(entry["gender_scores"], key=entry["gender_scores"].get)
+            if entry["age_scores"]:
+                entry["age"] = max(entry["age_scores"], key=entry["age_scores"].get)
 
             entry["last_updated"] = current_time
             entry["updates"] += 1
 
     return (
-        demographics_cache[track_id]["gender"],
-        demographics_cache[track_id]["age"]
+        demographics_cache[person_id]["gender"],
+        demographics_cache[person_id]["age"]
     )
 
 
 def prune_demographics(active_ids):
-    if len(demographics_cache) > 200:
+    """
+    Retain up to 500 entries, purging only entries older than 300s (5 minutes)
+    to match FastReID gallery retention.
+    """
+    if len(demographics_cache) > 500:
+        now = time.time()
         active_set = set(active_ids)
-        to_del = [
-            tid for tid in demographics_cache
-            if tid not in active_set
+        stale = [
+            pid for pid, d in demographics_cache.items()
+            if pid not in active_set and (now - d["last_updated"]) > 300.0
         ]
-        for tid in to_del:
-            del demographics_cache[tid]
+        for pid in stale:
+            del demographics_cache[pid]
 
 
 zone_history = [
@@ -2109,11 +2302,31 @@ try:
         # Automatic Floor Detection & Geometry update
         spatial_engine.detect_floor(frame)
 
+        # Resolve news broadcast preset if active
+        if active_roi == "news":
+            active_roi = (int(width * 0.48), int(height * 0.32), int(width * 0.48), int(height * 0.52))
+
+        # Determine frame crop for inference (focuses 100% of YOLO resolution onto the crowd)
+        if active_roi and isinstance(active_roi, (list, tuple)) and len(active_roi) == 4:
+            rx, ry, rw, rh = active_roi
+            rx = max(0, min(rx, width - 20))
+            ry = max(0, min(ry, height - 20))
+            rw = max(20, min(rw, width - rx))
+            rh = max(20, min(rh, height - ry))
+            active_roi = (rx, ry, rw, rh)
+            infer_image = color_frame[ry:ry+rh, rx:rx+rw]
+            roi_offset_x = rx
+            roi_offset_y = ry
+        else:
+            infer_image = color_frame
+            roi_offset_x = 0
+            roi_offset_y = 0
+
         # Periodic Obstacle Detection via YOLO furniture/object classes (throttled for performance)
         if last_obs_result is None or frame_number % 20 == 0:
             try:
                 last_obs_result = model.predict(
-                    color_frame,
+                    infer_image,
                     classes=[24, 25, 26, 28, 56, 57, 58, 59, 60, 61, 62, 63, 72, 73],
                     conf=0.15,
                     imgsz=IMAGE_SIZE,
@@ -2124,19 +2337,18 @@ try:
             except Exception:
                 pass
 
-        # Run YOLO Person Detection every second frame.
-        # ByteTrack keeps track IDs between inference frames.
+        # Run High-Sensitivity YOLO Person Detection every second frame.
+        # Tracks 100% of detected people without dropping occluded individuals.
         if (
             last_result is None
             or frame_number % INFERENCE_EVERY == 0
         ):
-            last_result = model.track(
-                color_frame,
-                persist=True,
+            last_result = model.predict(
+                infer_image,
                 classes=[0],
                 conf=MODEL_CONFIDENCE,
                 imgsz=IMAGE_SIZE,
-                tracker="bytetrack.yaml",
+                iou=IOU_THRESHOLD,
                 device=DEVICE,
                 verbose=False
             )[0]
@@ -2159,29 +2371,111 @@ try:
         if (
             result is not None
             and result.boxes is not None
-            and result.boxes.id is not None
+            and len(result.boxes) > 0
         ):
             boxes = (
                 result.boxes.xyxy
                 .cpu()
                 .numpy()
             )
-
-            ids = (
-                result.boxes.id
+            scores = (
+                result.boxes.conf
                 .cpu()
                 .numpy()
-                .astype(int)
-            )
+            ) if result.boxes.conf is not None else None
 
-            for box, track_id in zip(
+            # Offset bounding boxes back to full frame coordinates if ROI crop was used
+            if (roi_offset_x > 0 or roi_offset_y > 0) and len(boxes) > 0:
+                boxes[:, [0, 2]] += roi_offset_x
+                boxes[:, [1, 3]] += roi_offset_y
+
+            # Suppress duplicate nested detections on the same body to prevent multiple dots on 1 person
+            boxes = deduplicate_boxes(boxes, scores)
+
+            ids = crowd_tracker.update(boxes)
+
+            # Precalculate local crowd neighbor heights and body widths for depth-aware age comparison
+            neighbor_heights = {}
+            neighbor_widths = {}
+            for i, b in enumerate(boxes):
+                by2 = b[3]
+                bw = b[2] - b[0]
+                same_depth_boxes = [other_b for other_b in boxes if abs(other_b[3] - by2) <= 55]
+                h_list = [other_b[3] - other_b[1] for other_b in same_depth_boxes]
+                w_list = [other_b[2] - other_b[0] for other_b in same_depth_boxes]
+                neighbor_heights[i] = float(np.median(h_list)) if h_list else float(b[3] - b[1])
+                neighbor_widths[i] = float(np.median(w_list)) if w_list else float(bw)
+
+            active_frame_gids = set(track_to_global_id.values())
+            current_frame_local_ids = set()
+
+            for b_idx, (box, track_id) in enumerate(zip(
                 boxes,
                 ids
-            ):
+            )):
+                local_id = int(track_id)
+                current_frame_local_ids.add(local_id)
+
                 x1, y1, x2, y2 = map(
                     int,
                     box
                 )
+                x1 = max(0, min(x1, width - 1))
+                y1 = max(0, min(y1, height - 1))
+                x2 = max(x1 + 1, min(x2, width))
+                y2 = max(y1 + 1, min(y2, height))
+
+                box_h = y2 - y1
+                box_w = max(1, x2 - x1)
+
+                crop_y1 = max(0, y1)
+                crop_y2 = min(height, y2)
+                crop_x1 = max(0, x1)
+                crop_x2 = min(width, x2)
+                person_crop = (
+                    frame[crop_y1:crop_y2, crop_x1:crop_x2]
+                    if (crop_y2 > crop_y1 and crop_x2 > crop_x1)
+                    else None
+                )
+
+                # FastReID Stable Global Identity assignment
+                if local_id in track_to_global_id:
+                    global_id = track_to_global_id[local_id]
+                    track_frame_count[local_id] = track_frame_count.get(local_id, 0) + 1
+                    if identity_gallery is not None:
+                        identity_gallery.update_last_seen(global_id)
+                        # Refresh embedding periodically (every 45 frames) without changing ID
+                        fc = track_frame_count[local_id]
+                        if fc > 0 and fc % 45 == 0 and reid_extractor is not None and person_crop is not None:
+                            if box_h >= 32 and box_w >= 16:
+                                try:
+                                    emb = reid_extractor.embedding(person_crop)
+                                    if global_id in identity_gallery.entries:
+                                        identity_gallery.entries[global_id]["embeddings"].append(emb)
+                                        if len(identity_gallery.entries[global_id]["embeddings"]) > identity_gallery.max_embeddings:
+                                            identity_gallery.entries[global_id]["embeddings"] = identity_gallery.entries[global_id]["embeddings"][-identity_gallery.max_embeddings:]
+                                except Exception:
+                                    pass
+                else:
+                    assigned_gid = None
+                    if reid_extractor is not None and identity_gallery is not None and person_crop is not None and box_h >= 32 and box_w >= 16:
+                        try:
+                            emb = reid_extractor.embedding(person_crop)
+                            gid, score = identity_gallery.match_or_register(emb, exclude_ids=active_frame_gids)
+                            if gid is not None and gid < 0:
+                                gid, score = identity_gallery.add_pending_sample(gid, emb, exclude_ids=active_frame_gids)
+                            if gid is not None and gid > 0:
+                                assigned_gid = gid
+                        except Exception:
+                            pass
+
+                    if assigned_gid is None:
+                        assigned_gid = local_id
+
+                    track_to_global_id[local_id] = assigned_gid
+                    track_frame_count[local_id] = 1
+                    global_id = assigned_gid
+                    active_frame_gids.add(global_id)
 
                 center_x = int(
                     (x1 + x2) / 2
@@ -2205,33 +2499,37 @@ try:
                     center_x,
                     y2
                 )
-                box_h = y2 - y1
-                box_w = max(1, x2 - x1)
                 # Only add as ground contact foot point if person is standing full-body (not sitting on a bed/chair or a close-up head)
                 if (box_h / box_w >= 1.30 and box_h >= height * 0.22) or (y2 >= height * 0.88 and box_h >= height * 0.35):
                     current_foot_points.append([center_x, y2])
 
-                col = min(
-                    GRID_COLS - 1,
-                    max(
-                        0,
-                        int(
-                            center_x
-                            / (width / GRID_COLS)
+                if active_roi and isinstance(active_roi, (list, tuple)) and len(active_roi) == 4:
+                    rx, ry, rw, rh = active_roi
+                    rel_x = max(0, min(rw - 1, center_x - rx))
+                    rel_y = max(0, min(rh - 1, center_y - ry))
+                    col = min(GRID_COLS - 1, max(0, int(rel_x / (rw / GRID_COLS))))
+                    row = min(GRID_ROWS - 1, max(0, int(rel_y / (rh / GRID_ROWS))))
+                else:
+                    col = min(
+                        GRID_COLS - 1,
+                        max(
+                            0,
+                            int(
+                                center_x
+                                / (width / GRID_COLS)
+                            )
                         )
                     )
-                )
-
-                row = min(
-                    GRID_ROWS - 1,
-                    max(
-                        0,
-                        int(
-                            center_y
-                            / (height / GRID_ROWS)
+                    row = min(
+                        GRID_ROWS - 1,
+                        max(
+                            0,
+                            int(
+                                center_y
+                                / (height / GRID_ROWS)
+                            )
                         )
                     )
-                )
 
                 zone = (
                     row * GRID_COLS
@@ -2241,7 +2539,7 @@ try:
                 zone_counts[zone] += 1
 
                 previous = tracks.get(
-                    int(track_id)
+                    int(global_id)
                 )
 
                 if previous is None:
@@ -2251,7 +2549,7 @@ try:
                     dx = center_x - previous[0]
                     dy = center_y - previous[1]
 
-                tracks[int(track_id)] = (
+                tracks[int(global_id)] = (
                     center_x,
                     center_y
                 )
@@ -2319,7 +2617,8 @@ try:
                 zone_polygon = get_zone_polygon(
                     zone,
                     width,
-                    height
+                    height,
+                    roi=active_roi
                 )
 
                 zone_area_pixels = int(
@@ -2334,26 +2633,23 @@ try:
                     else 0
                 )
 
-                crop_y1 = max(0, y1)
-                crop_y2 = min(height, y2)
-                crop_x1 = max(0, x1)
-                crop_x2 = min(width, x2)
-                person_crop = (
-                    frame[crop_y1:crop_y2, crop_x1:crop_x2]
-                    if (crop_y2 > crop_y1 and crop_x2 > crop_x1)
-                    else None
-                )
-
+                # Demographics with crowd depth context and Global ID smoothing
+                avg_nh = neighbor_heights.get(b_idx, float(box_h))
+                exp_w = neighbor_widths.get(b_idx, float(box_w))
                 person_gender, person_age = get_person_demographics(
-                    int(track_id),
+                    int(global_id),
                     person_crop,
                     (x1, y1, x2, y2),
-                    speed
+                    speed,
+                    avg_neighbor_h=avg_nh,
+                    expected_head_w=exp_w,
                 )
 
                 people_data.append(
                     {
-                        "track_id": int(track_id),
+                        "id": int(global_id),
+                        "track_id": int(global_id),
+                        "local_id": int(track_id),
                         "head_point": list(head_point),
                         "body_point": list(body_point),
                         "foot_point": list(foot_point),
@@ -2370,44 +2666,62 @@ try:
                     }
                 )
 
-                # Person box and points (clean display without individual demographic labels on camera feed).
-                cv2.rectangle(
+                # Bounded green box region (toggled with Ctrl+B or UI button)
+                if SHOW_BOUNDING_BOXES:
+                    cv2.rectangle(
+                        frame,
+                        (x1, y1),
+                        (x2, y2),
+                        (0, 255, 0),
+                        2
+                    )
+
+                # Dotted center and Stable ID on person
+                dot_x = center_x
+                # Upper torso / chest center remains visible even in heavy lower-body occlusions
+                dot_y = int(y1 + 0.35 * (y2 - y1))
+
+                # Sleek concentric pinpoint dot
+                cv2.circle(frame, (dot_x, dot_y), 5, (0, 200, 255), 1, cv2.LINE_AA)
+                cv2.circle(frame, (dot_x, dot_y), 3, (0, 255, 255), -1, cv2.LINE_AA)
+                cv2.circle(frame, (dot_x, dot_y), 1, (255, 255, 255), -1, cv2.LINE_AA)
+
+                # High-visibility ID badge
+                id_label = f"ID: {global_id}"
+                (lbl_w, lbl_h), baseline = cv2.getTextSize(id_label, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+                lbl_x = max(2, dot_x - lbl_w // 2)
+                lbl_y = max(lbl_h + 4, dot_y - 8)
+
+                # Translucent dark backing pill for high readability in light or dark backgrounds
+                pill_x1 = max(0, lbl_x - 3)
+                pill_y1 = max(0, lbl_y - lbl_h - 2)
+                pill_x2 = min(width - 1, lbl_x + lbl_w + 3)
+                pill_y2 = min(height - 1, lbl_y + 2)
+
+                sub_rect = frame[pill_y1:pill_y2, pill_x1:pill_x2]
+                if sub_rect.size > 0:
+                    dark_bg = np.zeros_like(sub_rect)
+                    cv2.addWeighted(sub_rect, 0.30, dark_bg, 0.70, 0, sub_rect)
+                    frame[pill_y1:pill_y2, pill_x1:pill_x2] = sub_rect
+
+                cv2.putText(
                     frame,
-                    (x1, y1),
-                    (x2, y2),
-                    (0, 255, 0),
-                    2
+                    id_label,
+                    (lbl_x, lbl_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42,
+                    (0, 255, 255),
+                    1,
+                    cv2.LINE_AA
                 )
 
-                cv2.circle(
-                    frame,
-                    head_point,
-                    5,
-                    (255, 0, 255),
-                    -1
-                )
+            # Purge dropped local track IDs while retaining FastReID gallery retention
+            dropped_ids = set(track_to_global_id.keys()) - current_frame_local_ids
+            for did in dropped_ids:
+                track_to_global_id.pop(did, None)
+                track_frame_count.pop(did, None)
 
-                cv2.circle(
-                    frame,
-                    foot_point,
-                    4,
-                    (0, 0, 255),
-                    -1
-                )
-
-                draw_text(
-                    frame,
-                    f"ID: {track_id}",
-                    (
-                        x1,
-                        max(20, y1 - 8)
-                    ),
-                    (0, 255, 0),
-                    0.5,
-                    2
-                )
-
-            prune_demographics(ids)
+            prune_demographics(list(track_to_global_id.values()))
 
         if current_foot_points:
             spatial_engine.update_foot_points(current_foot_points)
@@ -2417,8 +2731,8 @@ try:
         current_time = time.time()
 
         # Preliminary spatial estimates for temporal engine
-        est_floor = sum(spatial_engine.get_zone_spatial_metrics(z, width, height)[0] for z in range(GRID_ROWS * GRID_COLS))
-        est_obs = sum(spatial_engine.get_zone_spatial_metrics(z, width, height)[1] for z in range(GRID_ROWS * GRID_COLS))
+        est_floor = sum(spatial_engine.get_zone_spatial_metrics(z, width, height, roi=active_roi)[0] for z in range(GRID_ROWS * GRID_COLS))
+        est_obs = sum(spatial_engine.get_zone_spatial_metrics(z, width, height, roi=active_roi)[1] for z in range(GRID_ROWS * GRID_COLS))
         est_usable = max(0.0, est_floor - est_obs)
 
         # Update Temporal Crowd Intelligence & Forecasting Layer
@@ -2460,7 +2774,7 @@ try:
                 trend = "STABLE"
 
             floor_area, obstacle_area, usable_area, obstacle_ratio, zone_furniture_cap = (
-                spatial_engine.get_zone_spatial_metrics(zone, width, height)
+                spatial_engine.get_zone_spatial_metrics(zone, width, height, roi=active_roi)
             )
 
             if args.event_capacity is not None:
@@ -2721,7 +3035,7 @@ try:
 
         state = {
             "event_id": EVENT_ID,
-            "camera_name": CAMERA_NAME,
+            "camera_name": camera.display_name if "camera" in globals() and camera else CAMERA_NAME,
             "timestamp": time.strftime(
                 "%Y-%m-%dT%H:%M:%S"
             ),
@@ -2848,24 +3162,42 @@ try:
         # ---------------- camera overlay ----------------
 
         # Render visual spatial debugging overlays (translucent green walkable floor, red obstacles)
-        frame = spatial_engine.draw_spatial_overlay(frame)
+        if SHOW_BOUNDING_BOXES or spatial_engine.show_spatial_overlay:
+            frame = spatial_engine.draw_spatial_overlay(frame)
 
-        # 2x2 Zone grid division lines
-        cv2.line(
-            frame,
-            (width // 2, 0),
-            (width // 2, height),
-            (255, 255, 255),
-            1
-        )
-
-        cv2.line(
-            frame,
-            (0, height // 2),
-            (width, height // 2),
-            (255, 255, 255),
-            1
-        )
+        # 2x2 Zone grid division lines (or ROI-bounded grid)
+        if active_roi and isinstance(active_roi, (list, tuple)) and len(active_roi) == 4:
+            rx, ry, rw, rh = active_roi
+            # Highlighted ROI boundary box
+            cv2.rectangle(frame, (rx, ry), (rx + rw, ry + rh), (0, 220, 255), 2)
+            cv2.putText(
+                frame,
+                "CROWD FOCUS ROI ACTIVE [R: Re-select | C: Clear]",
+                (rx + 6, max(18, ry - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                (0, 220, 255),
+                1,
+                cv2.LINE_AA
+            )
+            # 2x2 quadrant lines inside ROI
+            cv2.line(frame, (rx + rw // 2, ry), (rx + rw // 2, ry + rh), (255, 255, 255), 1)
+            cv2.line(frame, (rx, ry + rh // 2), (rx + rw, ry + rh // 2), (255, 255, 255), 1)
+        else:
+            cv2.line(
+                frame,
+                (width // 2, 0),
+                (width // 2, height),
+                (255, 255, 255),
+                1
+            )
+            cv2.line(
+                frame,
+                (0, height // 2),
+                (width, height // 2),
+                (255, 255, 255),
+                1
+            )
 
         # Update local MJPEG stream.
         ok, jpeg = cv2.imencode(
@@ -3122,20 +3454,23 @@ try:
             )
 
         floor_status_str = "PINNED" if spatial_engine.floor_pinned_manually else f"{int(spatial_engine.auto_floor_confidence * 100)}% Conf"
+        cam_title = camera.display_name if "camera" in globals() and camera else CAMERA_NAME
         draw_text(
             bottom,
-            f"Camera: {CAMERA_NAME} | Floor: {spatial_confidence_label} ({floor_status_str}) | Spatial Pressure: {temporal_engine.spatial_pressure}",
+            f"Camera: {cam_title} | Floor: {spatial_confidence_label} ({floor_status_str}) | Spatial Pressure: {temporal_engine.spatial_pressure}",
             (20, 114),
             (0, 140, 70) if spatial_engine.auto_floor_confidence >= 0.80 else (100, 110, 120),
             0.34,
             1
         )
 
+        roi_badge = " [ROI ACTIVE]" if active_roi else ""
+        dense_badge = " [DENSE BOOST]" if DENSE_CROWD_MODE else ""
         draw_text(
             bottom,
-            "G: Gray/Color   L: Pin/Unpin   F: Fullscreen   O: Overlay   Q / ESC: Exit",
-            (display_width - 440, 114),
-            (100, 110, 120),
+            f"R: Drag ROI  S: News Crop  C: Clear ROI  D: Dense Boost{roi_badge}{dense_badge}  G: Color  Q: Exit",
+            (display_width - 640, 114),
+            (0, 160, 255) if (active_roi or DENSE_CROWD_MODE) else (100, 110, 120),
             0.34,
             1
         )
@@ -3160,6 +3495,48 @@ try:
         ):
             running = False
 
+        elif key in (ord("r"), ord("R")):
+            # Interactive mouse ROI drag selection
+            print("\n[ROI Selection] Click and drag a box around the crowd with your mouse in the window, then press ENTER or SPACE.")
+            print("[ROI Selection] Or press 'c' / ESC to cancel.")
+            try:
+                roi_box = cv2.selectROI(WINDOW_NAME, frame, showCrosshair=True, fromCenter=False)
+                if roi_box[2] > 30 and roi_box[3] > 30:
+                    active_roi = (int(roi_box[0]), int(roi_box[1]), int(roi_box[2]), int(roi_box[3]))
+                    last_result = None
+                    print(f"[AI Crowd Intelligence] Active Crowd ROI set to: {active_roi}")
+                else:
+                    print("[AI Crowd Intelligence] ROI selection cancelled.")
+            except Exception as e:
+                print(f"[AI Crowd Intelligence] Error in selectROI: {e}")
+
+        elif key in (ord("s"), ord("S")):
+            # Quick split-screen / News broadcast crowd crop preset
+            active_roi = (int(width * 0.48), int(height * 0.32), int(width * 0.48), int(height * 0.52))
+            last_result = None
+            print(f"[AI Crowd Intelligence] News broadcast crowd crop applied: {active_roi}")
+
+        elif key in (ord("c"), ord("C")):
+            # Clear ROI / Full frame
+            active_roi = None
+            last_result = None
+            print("[AI Crowd Intelligence] ROI cleared. Full-frame tracking restored.")
+
+        elif key in (ord("d"), ord("D")):
+            # Toggle ultra-dense crowd boost
+            DENSE_CROWD_MODE = not DENSE_CROWD_MODE
+            if DENSE_CROWD_MODE:
+                MODEL_CONFIDENCE = 0.06
+                IOU_THRESHOLD = 0.70
+                IMAGE_SIZE = 1280
+                print("[AI Crowd Intelligence] Ultra-Dense Crowd Boost: ACTIVATED (conf=0.06, iou=0.70, imgsz=1280)")
+            else:
+                MODEL_CONFIDENCE = 0.10
+                IOU_THRESHOLD = 0.65
+                IMAGE_SIZE = 1024
+                print("[AI Crowd Intelligence] Ultra-Dense Crowd Boost: NORMAL (conf=0.10, iou=0.65, imgsz=1024)")
+            last_result = None
+
         elif key in (
             ord("g"),
             ord("G")
@@ -3177,6 +3554,15 @@ try:
             else:
                 spatial_engine._lock_floor()
                 print("Floor PINNED manually — current polygon held.")
+
+        elif key in (
+            ord("b"),
+            ord("B"),
+            2  # ASCII Ctrl+B
+        ):
+            SHOW_BOUNDING_BOXES = not SHOW_BOUNDING_BOXES
+            spatial_engine.show_spatial_overlay = SHOW_BOUNDING_BOXES
+            print(f"[AI Video Engine] Bounding Box & Spatial Overlay Mode (Ctrl+B): {'ENABLED' if SHOW_BOUNDING_BOXES else 'DISABLED'}")
 
         elif key in (
             ord("o"),

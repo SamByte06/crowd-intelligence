@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Crowd & Cross-Camera Re-Identification System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #f8fafc;
+            --bg-surface: #ffffff;
+            --border-subtle: #e2e8f0;
+            --border-hover: #cbd5e1;
+            --text-heading: #0f172a;
+            --text-body: #334155;
+            --text-muted: #64748b;
+            --accent-primary: #0284c7;
+            --accent-blue: #2563eb;
+            --accent-green: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-rose: #f43f5e;
+            --zone-card-bg: #f0fdf4;
+            --zone-card-border: #bbf7d0;
+            --font-main: 'Outfit', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+            --shadow-card: 0 4px 20px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.03);
+            --shadow-modal: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.05);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-body);
+            font-family: var(--font-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Top Header */
+        header {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 0.9rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        }
+
+        .brand-section {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .brand-logo {
+            width: 42px;
+            height: 42px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #0284c7, #2563eb);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.25);
+        }
+
+        .brand-logo svg {
+            width: 22px;
+            height: 22px;
+        }
+
+        .brand-title h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-heading);
+            letter-spacing: -0.02em;
+        }
+
+        .brand-title p {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+        }
+
+        .status-pill {
+            padding: 0.4rem 0.9rem;
+            border-radius: 9999px;
+            font-size: 0.76rem;
+            font-weight: 600;
+            font-family: var(--font-mono);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: 1px solid var(--border-subtle);
+            background: #f8fafc;
+        }
+
+        .status-pill.gpu {
+            background: #ecfdf5;
+            border-color: #a7f3d0;
+            color: #059669;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #10b981;
+            box-shadow: 0 0 8px #10b981;
+            animation: pulse-ring 1.8s infinite;
+        }
+
+        @keyframes pulse-ring {
+            0% { transform: scale(0.9); opacity: 0.8; }
+            50% { transform: scale(1.3); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.8; }
+        }
+
+        /* Main 50-50 Split Container */
+        main {
+            flex: 1;
+            padding: 1.5rem 2rem;
+            max-width: 1780px;
+            margin: 0 auto;
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            align-items: start;
+        }
+
+        @media (max-width: 1200px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Common Card Styles */
+        .dashboard-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: 16px;
+            box-shadow: var(--shadow-card);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card-header-row {
+            padding: 1.2rem 1.6rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .card-title-group h2 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-heading);
+            letter-spacing: -0.01em;
+        }
+
+        .card-title-group p {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            margin-top: 0.2rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .badge-live {
+            background: #dcfce7;
+            color: #15803d;
+            font-weight: 700;
+            font-size: 0.72rem;
+            padding: 0.25rem 0.65rem;
+            border-radius: 9999px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-family: var(--font-mono);
+        }
+
+        .badge-live .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #16a34a;
+        }
+
+        .btn-icon {
+            background: #f1f5f9;
+            border: 1px solid var(--border-subtle);
+            color: var(--text-muted);
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-icon:hover {
+            background: #e2e8f0;
+            color: var(--text-heading);
+        }
+
+        /* Stream Tabs */
+        .stream-view-tabs {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.75rem 1.6rem;
+            background: #f8fafc;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .view-tab-btn {
+            background: #ffffff;
+            border: 1px solid var(--border-subtle);
+            color: var(--text-muted);
+            padding: 0.4rem 0.85rem;
+            border-radius: 8px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .view-tab-btn:hover {
+            border-color: var(--border-hover);
+            color: var(--text-heading);
+        }
+
+        .view-tab-btn.active {
+            background: #0284c7;
+            border-color: #0284c7;
+            color: #ffffff;
+            box-shadow: 0 2px 6px rgba(2, 132, 199, 0.25);
+        }
+
+        /* Video Stream Container (Left Half) */
+        .video-viewport {
+            background: #0b0f19;
+            position: relative;
+            min-height: 440px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            border-radius: 12px;
+            margin: 1.2rem 1.6rem;
+            box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
+        }
+
+        .video-viewport.dual-mode {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+            background: #060911;
+            padding: 4px;
+        }
+
+        .stream-subpanel {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background: #0b0f19;
+            border-radius: 8px;
+        }
+
+        .stream-subpanel img,
+        .video-viewport img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* Overlay Pills matching Screenshot */
+        .overlay-pill-topleft {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            background: rgba(11, 15, 25, 0.82);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #ffffff;
+            padding: 0.35rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.74rem;
+            font-family: var(--font-mono);
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            z-index: 10;
+        }
+
+        .overlay-pill-bottomleft {
+            position: absolute;
+            bottom: 14px;
+            left: 14px;
+            background: rgba(11, 15, 25, 0.88);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #ffffff;
+            padding: 0.4rem 0.95rem;
+            border-radius: 6px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .overlay-zone-tag {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            background: rgba(2, 132, 199, 0.85);
+            backdrop-filter: blur(8px);
+            color: #ffffff;
+            padding: 0.25rem 0.65rem;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            z-index: 10;
+        }
+
+        /* Camera Configuration & Controls */
+        .camera-controls-box {
+            padding: 1rem 1.6rem 1.4rem;
+            background: #ffffff;
+            border-top: 1px solid #f1f5f9;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+
+        .stream-input-group {
+            display: flex;
+            gap: 0.6rem;
+            align-items: center;
+        }
+
+        .stream-input-group label {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .input-url {
+            flex: 1;
+            padding: 0.55rem 0.9rem;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            font-size: 0.82rem;
+            font-family: var(--font-mono);
+            background: #f8fafc;
+            color: var(--text-heading);
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .input-url:focus {
+            border-color: var(--accent-primary);
+            background: #ffffff;
+            box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.12);
+        }
+
+        .btn {
+            padding: 0.55rem 1rem;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            border: 1px solid transparent;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            transition: all 0.2s;
+            font-family: var(--font-main);
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: #0284c7;
+            color: #ffffff;
+        }
+
+        .btn-primary:hover {
+            background: #0369a1;
+        }
+
+        .btn-secondary {
+            background: #f1f5f9;
+            color: var(--text-body);
+            border-color: var(--border-subtle);
+        }
+
+        .btn-secondary:hover {
+            background: #e2e8f0;
+            color: var(--text-heading);
+        }
+
+        .btn-reset {
+            background: #fee2e2;
+            color: #b91c1c;
+            border-color: #fecaca;
+        }
+
+        .btn-reset:hover {
+            background: #fecaca;
+        }
+
+        .camera-status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.76rem;
+            color: var(--text-muted);
+            padding-top: 0.4rem;
+        }
+
+        /* RIGHT HALF: Zone-wise Crowd Density */
+        .right-analytics-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+        }
+
+        /* 2-Zone Cards Grid (matching screenshot) */
+        .zones-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.2rem;
+            padding: 1.4rem 1.6rem 0.8rem;
+        }
+
+        @media (max-width: 680px) {
+            .zones-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .zone-card {
+            background: var(--zone-card-bg);
+            border: 1px solid var(--zone-card-border);
+            border-radius: 14px;
+            padding: 1.4rem 1.6rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .zone-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px -4px rgba(16, 185, 129, 0.12);
+        }
+
+        .zone-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+        }
+
+        .zone-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
+        .zone-subtitle {
+            font-size: 0.74rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .zone-metric-row {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin: 0.2rem 0;
+        }
+
+        .zone-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            background: rgba(16, 185, 129, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #059669;
+        }
+
+        .zone-icon svg {
+            width: 26px;
+            height: 26px;
+        }
+
+        .zone-count-wrapper {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .zone-count-number {
+            font-size: 2.4rem;
+            font-weight: 800;
+            color: #0f172a;
+            line-height: 1;
+            font-family: var(--font-mono);
+        }
+
+        .zone-count-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 0.2rem;
+        }
+
+        .zone-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 0.2rem;
+        }
+
+        .zone-status-badge {
+            background: #dcfce7;
+            color: #15803d;
+            font-size: 0.74rem;
+            font-weight: 700;
+            padding: 0.3rem 0.8rem;
+            border-radius: 6px;
+            letter-spacing: 0.04em;
+            display: inline-block;
+        }
+
+        .zone-status-badge.moderate {
+            background: #fef3c7;
+            color: #b45309;
+        }
+
+        .zone-status-badge.crowded {
+            background: #ffe4e6;
+            color: #be123c;
+        }
+
+        .zone-id-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            font-size: 0.74rem;
+            color: var(--text-muted);
+        }
+
+        .mini-id-pill {
+            background: #ffffff;
+            border: 1px solid var(--zone-card-border);
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            color: #047857;
+            font-size: 0.72rem;
+        }
+
+        /* Total Overall Deduplicated Area Card */
+        .overall-area-card {
+            margin: 0 1.6rem 1rem;
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            border: 1px solid #bae6fd;
+            border-radius: 14px;
+            padding: 1.4rem 1.6rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+
+        .overall-card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .overall-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #0369a1;
+        }
+
+        .overall-tag {
+            background: #0284c7;
+            color: #ffffff;
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 0.25rem 0.65rem;
+            border-radius: 9999px;
+            font-family: var(--font-mono);
+        }
+
+        .overall-stats-layout {
+            display: flex;
+            align-items: baseline;
+            gap: 1.5rem;
+        }
+
+        .overall-number {
+            font-size: 3rem;
+            font-weight: 800;
+            color: #0f172a;
+            font-family: var(--font-mono);
+            line-height: 1;
+        }
+
+        .overall-desc {
+            font-size: 0.85rem;
+            color: #334155;
+            line-height: 1.4;
+        }
+
+        .overall-logic-banner {
+            background: #ffffff;
+            border: 1px solid #bae6fd;
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            font-size: 0.82rem;
+            line-height: 1.45;
+            color: #0369a1;
+            font-weight: 500;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.6rem;
+        }
+
+        .overall-logic-banner.highlight-match {
+            background: #f0fdf4;
+            border-color: #86efac;
+            color: #166534;
+        }
+
+        /* Identity Registry Table */
+        .registry-section {
+            padding: 0.5rem 1.6rem 1.6rem;
+        }
+
+        .registry-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .registry-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-heading);
+        }
+
+        .table-responsive {
+            overflow-x: auto;
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+            background: #ffffff;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+
+        th {
+            background: #f8fafc;
+            text-align: left;
+            padding: 0.65rem 0.9rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            border-bottom: 1px solid var(--border-subtle);
+            font-family: var(--font-mono);
+        }
+
+        td {
+            padding: 0.75rem 0.9rem;
+            border-bottom: 1px solid #f1f5f9;
+            color: var(--text-body);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .badge-id {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            font-size: 0.78rem;
+            background: #e0f2fe;
+            color: #0284c7;
+            border: 1px solid #bae6fd;
+        }
+
+        .zone-pill {
+            display: inline-block;
+            padding: 0.2rem 0.55rem;
+            border-radius: 4px;
+            font-size: 0.74rem;
+            font-weight: 600;
+        }
+
+        .zone-pill.z1 {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+
+        .zone-pill.z2 {
+            background: #f3e8ff;
+            color: #7e22ce;
+        }
+
+        .zone-pill.both {
+            background: #dcfce7;
+            color: #15803d;
+            font-weight: 700;
+            box-shadow: 0 0 6px rgba(16, 185, 129, 0.2);
+        }
+
+        .status-badge-table {
+            padding: 0.2rem 0.55rem;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-family: var(--font-mono);
+            font-weight: 600;
+        }
+
+        .status-badge-table.matched {
+            background: #dcfce7;
+            color: #15803d;
+        }
+
+        .status-badge-table.new {
+            background: #e0f2fe;
+            color: #0284c7;
+        }
+
+        .status-badge-table.memory {
+            background: #fef3c7;
+            color: #b45309;
+        }
+
+        /* Footer */
+        footer {
+            background: #ffffff;
+            border-top: 1px solid var(--border-subtle);
+            padding: 0.9rem 2rem;
+            text-align: center;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-top: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="brand-section">
+            <div class="brand-logo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+            </div>
+            <div class="brand-title">
+                <h1>AI Crowd & Cross-Camera Re-Identification</h1>
+                <p>Zone-wise Monitoring &bull; YOLO11s Detection &bull; FastReID Person Deduplication</p>
+            </div>
+        </div>
+
+        <div class="header-status">
+            <div class="status-pill gpu">
+                <span class="pulse-dot"></span>
+                <span>NVIDIA RTX 3050 &bull; CUDA Active</span>
+            </div>
+            <div class="status-pill">
+                <span>FPS: <strong id="fps-counter" style="color: #0284c7;">60.0</strong></span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main 50-50 Split Layout -->
+    <main>
+
+        <!-- LEFT HALF: Live Monitoring -->
+        <div class="dashboard-card" id="monitoring-panel">
+            <div class="card-header-row">
+                <div class="card-title-group">
+                    <h2>Live Monitoring</h2>
+                    <p id="cam-active-subtitle">
+                        <span style="color: #10b981; font-weight: 700;">&bull;</span>
+                        <span id="cam-active-name">Dual Zone Monitoring &bull; Zone 1 & Zone 2</span>
+                    </p>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                    <span class="badge-live">
+                        <span class="dot"></span>
+                        LIVE
+                    </span>
+                    <button class="btn-icon" onclick="toggleFullScreen()" title="Full Screen">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- View Selector Tabs -->
+            <div class="stream-view-tabs">
+                <button class="view-tab-btn active" id="tab-dual" onclick="switchStreamView('dual')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="18" rx="2"/><rect x="13" y="3" width="8" height="18" rx="2"/></svg>
+                    Dual Split View
+                </button>
+                <button class="view-tab-btn" id="tab-zone1" onclick="switchStreamView('zone1')">
+                    Zone 1 (Webcam)
+                </button>
+                <button class="view-tab-btn" id="tab-zone2" onclick="switchStreamView('zone2')">
+                    Zone 2 (Phone Cam)
+                </button>
+            </div>
+
+            <!-- Video Viewport (Matching User Screenshot) -->
+            <div class="video-viewport dual-mode" id="video-viewport">
+                <!-- Dual Mode Containers -->
+                <div class="stream-subpanel" id="subpanel-cam1">
+                    <div class="overlay-pill-topleft" id="live-clock-pill-1">2026-10-15 20:45:54</div>
+                    <div class="overlay-zone-tag">ZONE 1: WEBCAM</div>
+                    <div class="overlay-pill-bottomleft">
+                        <span>People: <strong id="overlay-cam1-count">0</strong></span>
+                    </div>
+                    <img id="stream-cam1-img" src="/stream/cam1" alt="Zone 1 Webcam">
+                </div>
+
+                <div class="stream-subpanel" id="subpanel-cam2">
+                    <div class="overlay-pill-topleft" id="live-clock-pill-2">2026-10-15 20:45:54</div>
+                    <div class="overlay-zone-tag" style="background: rgba(37, 99, 235, 0.85);">ZONE 2: PHONE</div>
+                    <div class="overlay-pill-bottomleft">
+                        <span>People: <strong id="overlay-cam2-count">0</strong></span>
+                    </div>
+                    <img id="stream-cam2-img" src="/stream/cam2" alt="Zone 2 Phone Cam">
+                </div>
+            </div>
+
+            <!-- Camera Connection & Control Toolbar -->
+            <div class="camera-controls-box">
+                <div class="stream-input-group">
+                    <label for="phone-url-input">Phone Stream URL:</label>
+                    <input type="text" id="phone-url-input" class="input-url" placeholder="https://100.82.217.254:8080/video" value="https://100.82.217.254:8080/video">
+                    <button class="btn btn-primary" onclick="connectPhoneStream()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                        Connect Phone
+                    </button>
+                    <button class="btn btn-secondary" id="sim-btn" onclick="toggleCrossCamSimulation()">
+                        <span>Test Cross-Cam ReID</span>
+                    </button>
+                    <button class="btn btn-reset" onclick="resetGallery()" title="Reset Identity Gallery">
+                        Reset
+                    </button>
+                </div>
+                <div class="camera-status-row">
+                    <div>
+                        <span>Zone 1 (Webcam): <strong id="cam1-conn-status" style="color: #10b981;">Connected</strong></span>
+                        &bull;
+                        <span>Zone 2 (Phone Stream): <strong id="cam2-conn-status" style="color: #64748b;">Standby</strong></span>
+                    </div>
+                    <div>
+                        <span>ReID Match Threshold: <strong>0.70</strong></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT HALF: Zone-wise Crowd Density & Re-ID Deduplicated Analytics -->
+        <div class="right-analytics-container">
+            <div class="dashboard-card">
+                <div class="card-header-row">
+                    <div class="card-title-group">
+                        <h2>Zone-wise Crowd Density</h2>
+                        <p>Real-time zone occupancy with FastReID person identity deduplication</p>
+                    </div>
+                    <span class="status-pill" id="total-badge-pill" style="background: #f0fdf4; border-color: #bbf7d0; color: #166534;">
+                        2 Active Zones
+                    </span>
+                </div>
+
+                <!-- 2-Zone Cards (Matching Screenshot Layout) -->
+                <div class="zones-grid">
+                    <!-- Zone 1 Card -->
+                    <div class="zone-card" id="zone1-card">
+                        <div class="zone-card-header">
+                            <span class="zone-title">Zone 1</span>
+                            <span class="zone-subtitle">Webcam &bull; Area 1</span>
+                        </div>
+                        <div class="zone-metric-row">
+                            <div class="zone-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                    <circle cx="9" cy="7" r="4"/>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                                </svg>
+                            </div>
+                            <div class="zone-count-wrapper">
+                                <span class="zone-count-number" id="zone1-count">0</span>
+                                <span class="zone-count-label">people</span>
+                            </div>
+                        </div>
+                        <div class="zone-card-footer">
+                            <span class="zone-status-badge" id="zone1-status-badge">SAFE</span>
+                            <div class="zone-id-pills" id="zone1-id-pills">
+                                <span>No people</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Zone 2 Card -->
+                    <div class="zone-card" id="zone2-card">
+                        <div class="zone-card-header">
+                            <span class="zone-title">Zone 2</span>
+                            <span class="zone-subtitle">Phone Stream &bull; Area 2</span>
+                        </div>
+                        <div class="zone-metric-row">
+                            <div class="zone-icon" style="background: rgba(37, 99, 235, 0.12); color: #2563eb;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                    <circle cx="9" cy="7" r="4"/>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                                </svg>
+                            </div>
+                            <div class="zone-count-wrapper">
+                                <span class="zone-count-number" id="zone2-count">0</span>
+                                <span class="zone-count-label">people</span>
+                            </div>
+                        </div>
+                        <div class="zone-card-footer">
+                            <span class="zone-status-badge" id="zone2-status-badge">SAFE</span>
+                            <div class="zone-id-pills" id="zone2-id-pills">
+                                <span>No people</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Overall Area Deduplication Metric Card -->
+                <div class="overall-area-card">
+                    <div class="overall-card-top">
+                        <span class="overall-title">Total People in Overall Monitored Area</span>
+                        <span class="overall-tag">FastReID Deduplicated</span>
+                    </div>
+
+                    <div class="overall-stats-layout">
+                        <div class="overall-number" id="overall-total-count">0</div>
+                        <div class="overall-desc">
+                            <strong>Unique individuals detected across all zones.</strong><br>
+                            If the same person appears in both Zone 1 and Zone 2, FastReID merges their identity so they are counted only <strong>ONCE</strong>.
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Deduplication Explanation -->
+                    <div class="overall-logic-banner" id="dedup-explanation-banner">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink: 0; margin-top: 1px;"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                        <div id="dedup-explanation-text">
+                            No persons detected yet. Step in front of the camera or connect your phone stream to begin.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live FastReID Identity Registry Table -->
+                <div class="registry-section">
+                    <div class="registry-title-row">
+                        <span class="registry-title">Live Active Person Registry</span>
+                        <span style="font-size: 0.74rem; color: var(--text-muted);">
+                            Gallery Embeddings: <strong id="gallery-count">0</strong>
+                        </span>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Global Person ID</th>
+                                    <th>Current Zone / Camera</th>
+                                    <th>Local Tracker</th>
+                                    <th>Re-Identification Status</th>
+                                    <th>Last Seen</th>
+                                </tr>
+                            </thead>
+                            <tbody id="registry-table-body">
+                                <tr>
+                                    <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                                        Waiting for detections in Zone 1 or Zone 2...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        FastReID Multi-Camera Person Re-Identification &bull; YOLO11s Person Detector &bull; ByteTrack Motion Tracker &bull; PyTorch CUDA Acceleration
+    </footer>
+
+    <!-- Frontend Interactive Logic & Real-Time Sync -->
+    <script>
+        // Palette for consistent ID badge colors
+        const idColors = ['#0284c7', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f43f5e', '#6366f1'];
+        function getIdColor(id) {
+            return idColors[(id - 1) % idColors.length];
+        }
+
+        // Live Clock Tick (Matches screenshot overlay: YYYY-MM-DD HH:MM:SS)
+        function updateLiveClock() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            const timeString = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+
+            const pill1 = document.getElementById('live-clock-pill-1');
+            const pill2 = document.getElementById('live-clock-pill-2');
+            if (pill1) pill1.innerText = timeString;
+            if (pill2) pill2.innerText = timeString;
+        }
+        setInterval(updateLiveClock, 1000);
+        updateLiveClock();
+
+        // Switch View Modes: 'dual', 'zone1', 'zone2'
+        let currentMode = 'dual';
+        function switchStreamView(mode) {
+            currentMode = mode;
+            const viewport = document.getElementById('video-viewport');
+            const panel1 = document.getElementById('subpanel-cam1');
+            const panel2 = document.getElementById('subpanel-cam2');
+            const subtitle = document.getElementById('cam-active-name');
+
+            document.getElementById('tab-dual').classList.remove('active');
+            document.getElementById('tab-zone1').classList.remove('active');
+            document.getElementById('tab-zone2').classList.remove('active');
+
+            if (mode === 'dual') {
+                document.getElementById('tab-dual').classList.add('active');
+                viewport.className = 'video-viewport dual-mode';
+                panel1.style.display = 'flex';
+                panel2.style.display = 'flex';
+                subtitle.innerText = 'Dual Zone Monitoring \u2022 Zone 1 & Zone 2';
+            } else if (mode === 'zone1') {
+                document.getElementById('tab-zone1').classList.add('active');
+                viewport.className = 'video-viewport';
+                panel1.style.display = 'flex';
+                panel2.style.display = 'none';
+                subtitle.innerText = 'Camera 01 \u2022 Zone 1 (Webcam)';
+            } else if (mode === 'zone2') {
+                document.getElementById('tab-zone2').classList.add('active');
+                viewport.className = 'video-viewport';
+                panel1.style.display = 'none';
+                panel2.style.display = 'flex';
+                subtitle.innerText = 'Camera 02 \u2022 Zone 2 (Phone Stream)';
+            }
+        }
+
+        // Fullscreen toggle
+        function toggleFullScreen() {
+            const vp = document.getElementById('video-viewport');
+            if (!document.fullscreenElement) {
+                if (vp.requestFullscreen) vp.requestFullscreen();
+                else if (vp.webkitRequestFullscreen) vp.webkitRequestFullscreen();
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen();
+            }
+        }
+
+        // Connect Phone Stream API call
+        async function connectPhoneStream() {
+            const url = document.getElementById('phone-url-input').value.trim();
+            if (!url) return;
+            try {
+                const res = await fetch('/api/connect_phone', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cam2_url: url })
+                });
+                const data = await res.json();
+                console.log("Phone Stream Connected:", data);
+                // Refresh img source
+                document.getElementById('stream-cam2-img').src = '/stream/cam2?t=' + Date.now();
+            } catch (err) {
+                console.error("Connect phone error:", err);
+            }
+        }
+
+        // Cross-Cam Simulation Toggle
+        async function toggleCrossCamSimulation() {
+            try {
+                const res = await fetch('/api/toggle_simulation', { method: 'POST' });
+                const data = await res.json();
+                const btn = document.getElementById('sim-btn');
+                if (data.simulation) {
+                    btn.className = 'btn btn-primary';
+                    btn.innerHTML = '<span>Stop Cross-Cam Test</span>';
+                } else {
+                    btn.className = 'btn btn-secondary';
+                    btn.innerHTML = '<span>Test Cross-Cam ReID</span>';
+                }
+                document.getElementById('stream-cam2-img').src = '/stream/cam2?t=' + Date.now();
+            } catch (err) {
+                console.error("Simulation error:", err);
+            }
+        }
+
+        // Reset Identity Gallery
+        async function resetGallery() {
+            if (!confirm("Reset all tracked identities and gallery embeddings?")) return;
+            try {
+                await fetch('/api/reset', { method: 'POST' });
+            } catch (err) {
+                console.error("Reset error:", err);
+            }
+        }
+
+        // Helper to get status density badge
+        function getDensityStatus(count) {
+            if (count <= 3) return { label: 'SAFE', class: 'zone-status-badge' };
+            if (count <= 7) return { label: 'MODERATE', class: 'zone-status-badge moderate' };
+            return { label: 'CROWDED', class: 'zone-status-badge crowded' };
+        }
+
+        // Main Real-Time Polling Loop
+        async function updateDashboardStats() {
+            try {
+                const res = await fetch('/api/stats');
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // 1. Basic Metrics
+                const z1Count = data.zone1_count !== undefined ? data.zone1_count : data.cam1_count;
+                const z2Count = data.zone2_count !== undefined ? data.zone2_count : data.cam2_count;
+                const overallCount = data.total_unique_persons !== undefined ? data.total_unique_persons : 0;
+                const z1Ids = data.zone1_ids || [];
+                const z2Ids = data.zone2_ids || [];
+                const bothIds = data.both_zones_ids || [];
+
+                // 2. Update Overlay Counts
+                document.getElementById('overlay-cam1-count').innerText = z1Count;
+                document.getElementById('overlay-cam2-count').innerText = z2Count;
+                document.getElementById('fps-counter').innerText = data.fps.toFixed(1);
+                document.getElementById('gallery-count').innerText = data.gallery_size;
+
+                // 3. Update Zone 1 Card
+                document.getElementById('zone1-count').innerText = z1Count;
+                const z1Status = getDensityStatus(z1Count);
+                const z1Badge = document.getElementById('zone1-status-badge');
+                z1Badge.innerText = z1Status.label;
+                z1Badge.className = z1Status.class;
+
+                const z1Pills = document.getElementById('zone1-id-pills');
+                if (z1Ids.length > 0) {
+                    z1Pills.innerHTML = z1Ids.map(id => `<span class="mini-id-pill">ID #${id}</span>`).join(' ');
+                } else {
+                    z1Pills.innerHTML = '<span>No people</span>';
+                }
+
+                // 4. Update Zone 2 Card
+                document.getElementById('zone2-count').innerText = z2Count;
+                const z2Status = getDensityStatus(z2Count);
+                const z2Badge = document.getElementById('zone2-status-badge');
+                z2Badge.innerText = z2Status.label;
+                z2Badge.className = z2Status.class;
+
+                const z2Pills = document.getElementById('zone2-id-pills');
+                if (z2Ids.length > 0) {
+                    z2Pills.innerHTML = z2Ids.map(id => `<span class="mini-id-pill" style="border-color:#bfdbfe; color:#1d4ed8;">ID #${id}</span>`).join(' ');
+                } else {
+                    z2Pills.innerHTML = '<span>No people</span>';
+                }
+
+                // 5. Update Total Overall Count
+                document.getElementById('overall-total-count').innerText = overallCount;
+
+                // 6. Dynamic ReID Deduplication Explanation Banner
+                const banner = document.getElementById('dedup-explanation-banner');
+                const bannerText = document.getElementById('dedup-explanation-text');
+
+                if (bothIds.length > 0) {
+                    banner.className = 'overall-logic-banner highlight-match';
+                    const idsStr = bothIds.map(id => `ID #${id}`).join(', ');
+                    bannerText.innerHTML = `
+                        <strong>\u2b50 Cross-Camera Match: Person ${idsStr} is present in BOTH Zone 1 and Zone 2!</strong><br>
+                        FastReID matched appearance embeddings across cameras. Rather than counting 1 + 1 = 2, the overall count is deduplicated to <strong>${overallCount} unique individual</strong>.
+                    `;
+                } else if (z1Count > 0 && z2Count > 0) {
+                    banner.className = 'overall-logic-banner';
+                    bannerText.innerHTML = `
+                        <strong>\ud83d\udc65 Distinct Individuals:</strong> Different persons detected in Zone 1 (${z1Ids.map(id=>'#'+id).join(', ') || 'unassigned'}) and Zone 2 (${z2Ids.map(id=>'#'+id).join(', ') || 'unassigned'}). FastReID confirmed they are different people &bull; Total = <strong>${overallCount}</strong>.
+                    `;
+                } else if (overallCount > 0) {
+                    banner.className = 'overall-logic-banner';
+                    bannerText.innerHTML = `
+                        <strong>Active Detection:</strong> ${overallCount} person${overallCount > 1 ? 's' : ''} currently monitored in area.
+                    `;
+                } else {
+                    banner.className = 'overall-logic-banner';
+                    bannerText.innerHTML = `
+                        No persons detected yet. Step in front of the camera or connect your phone stream to begin.
+                    `;
+                }
+
+                // 7. Connection Status Badges
+                const c1Stat = document.getElementById('cam1-conn-status');
+                c1Stat.innerText = data.cam1_connected ? 'Connected' : 'Waiting';
+                c1Stat.style.color = data.cam1_connected ? '#10b981' : '#f43f5e';
+
+                const c2Stat = document.getElementById('cam2-conn-status');
+                c2Stat.innerText = data.cam2_connected ? 'Connected' : 'Standby';
+                c2Stat.style.color = data.cam2_connected ? '#2563eb' : '#64748b';
+
+                // 8. Identity Table
+                const tbody = document.getElementById('registry-table-body');
+                if (data.active_persons && data.active_persons.length > 0) {
+                    tbody.innerHTML = data.active_persons.map(p => {
+                        let zoneClass = 'z1';
+                        if (p.camera.includes('Both')) zoneClass = 'both';
+                        else if (p.camera.includes('Zone 2') || p.camera.includes('Phone')) zoneClass = 'z2';
+
+                        let statusBadgeClass = 'new';
+                        if (p.status.includes('Re-Matched') || p.status.includes('Re-Identified')) {
+                            statusBadgeClass = 'matched';
+                        } else if (p.status.includes('Memory')) {
+                            statusBadgeClass = 'memory';
+                        }
+
+                        const clr = getIdColor(p.global_id);
+                        return `
+                            <tr>
+                                <td>
+                                    <span class="badge-id" style="background: ${clr}18; color: ${clr}; border-color: ${clr}44;">
+                                        PERSON ID #${p.global_id}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="zone-pill ${zoneClass}">
+                                        ${p.camera}
+                                    </span>
+                                </td>
+                                <td style="font-family: var(--font-mono);">${p.local_id !== '-' ? 'Track #' + p.local_id : '-'}</td>
+                                <td>
+                                    <span class="status-badge-table ${statusBadgeClass}">
+                                        ${p.status}
+                                    </span>
+                                </td>
+                                <td style="font-family: var(--font-mono); color: var(--text-muted);">${p.age_seconds.toFixed(1)}s ago</td>
+                            </tr>
+                        `;
+                    }).join('');
+                } else {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                                No persons currently in view. Stand in front of Zone 1 (Webcam) or Zone 2 (Phone Cam).
+                            </td>
+                        </tr>
+                    `;
+                }
+
+            } catch (err) {
+                // Ignore transient network issues
+            }
+        }
+
+        setInterval(updateDashboardStats, 500);
+        updateDashboardStats();
+    </script>
+</body>
+</html>

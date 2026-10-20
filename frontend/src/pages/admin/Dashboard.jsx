@@ -21,6 +21,18 @@ function Dashboard() {
     const [toastMessage, setToastMessage] = useState("");
     const [isFullscreen, setIsFullscreen] = useState(false);
 
+    // Dynamic Video / YouTube Source state
+    const [youtubeUrl, setYoutubeUrl] = useState("");
+    const [sourceLoading, setSourceLoading] = useState(false);
+    const [sourceStatusMsg, setSourceStatusMsg] = useState("");
+    const [activeSourceInfo, setActiveSourceInfo] = useState({
+        source_type: "webcam",
+        display_name: "Camera 01 - Main Entrance",
+        video_title: "Webcam Device 0",
+        is_live: true,
+        fps: 30,
+    });
+
     const [crowdData, setCrowdData] = useState({
         total_people: 1,
         overall_risk: 5,
@@ -43,7 +55,163 @@ function Dashboard() {
     // Helper to show temporary toast messages
     const showToast = (msg) => {
         setToastMessage(msg);
-        setTimeout(() => setToastMessage(""), 3000);
+        setTimeout(() => setToastMessage(""), 3500);
+    };
+
+    // Poll current active video source from AI engine
+    useEffect(() => {
+        let active = true;
+        const checkSource = async () => {
+            try {
+                const res = await fetch("http://localhost:8000/source");
+                if (res.ok && active) {
+                    const data = await res.json();
+                    if (data && data.display_name) {
+                        setActiveSourceInfo(data);
+                    }
+                }
+            } catch (err) {
+                // AI engine currently offline
+            }
+        };
+        checkSource();
+        const interval = setInterval(checkSource, 5000);
+        return () => {
+            active = false;
+            clearInterval(interval);
+        };
+    }, []);
+
+    // Helper to sanitize terminal ANSI escape sequences from backend errors
+    const cleanErrorMsg = (msg) => {
+        if (!msg) return "";
+        return msg
+            .replace(/\u001b\[[0-9;]*m/g, "")
+            .replace(/\[\[0;[0-9]+m[^\]]*\]/g, "")
+            .replace(/\[0;[0-9]+m/g, "")
+            .replace(/\[0m/g, "")
+            .replace(/ERROR:\s*/g, "")
+            .trim();
+    };
+
+    // Toggle visual floor/obstacle overlay on camera stream
+    const handleToggleSpatialOverlay = async () => {
+        try {
+            const res = await fetch("http://localhost:8000/toggle_spatial_overlay", { method: "POST" });
+            const data = await res.json();
+            if (data.success) {
+                setActiveSourceInfo((prev) => ({ ...prev, show_spatial_overlay: data.show_spatial_overlay }));
+                showToast(data.message);
+            }
+        } catch (err) {
+            showToast("Failed to toggle spatial floor overlay.");
+        }
+    };
+
+    // Toggle green bounding box regions for persons and spatial obstacles (Ctrl+B)
+    const handleToggleBoundingBoxes = async () => {
+        try {
+            const res = await fetch("http://localhost:8000/toggle_bounding_boxes", { method: "POST" });
+            const data = await res.json();
+            if (data.success) {
+                setActiveSourceInfo((prev) => ({
+                    ...prev,
+                    show_bounding_boxes: data.show_bounding_boxes,
+                    show_spatial_overlay: data.show_bounding_boxes,
+                }));
+                showToast(data.message);
+            }
+        } catch (err) {
+            showToast("Failed to toggle bounding boxes (AI Engine may be offline).");
+        }
+    };
+
+    // Toggle ROI Crop to news window or full frame
+    const handleSetRoi = async (roiType) => {
+        try {
+            const res = await fetch("http://localhost:8000/set_roi", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ roi: roiType }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setActiveSourceInfo((prev) => ({
+                    ...prev,
+                    active_roi: data.active_roi,
+                }));
+                showToast(data.active_roi ? "🎯 Cropped to Crowd Video Window (Studio Anchors Excluded)" : "Full Frame Tracking Restored");
+            }
+        } catch (err) {
+            showToast("Failed to set ROI (AI Engine may be offline).");
+        }
+    };
+
+    // Global keyboard listener for Ctrl+B
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
+                e.preventDefault();
+                handleToggleBoundingBoxes();
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, []);
+
+    // Switch video source dynamically (YouTube URL, webcam 0, or file)
+    const handleSwitchSource = async (newSource) => {
+        if (newSource === undefined || newSource === null || newSource === "") {
+            showToast("Please enter a YouTube video URL or source.");
+            return;
+        }
+        setSourceLoading(true);
+        setSourceStatusMsg("Extracting video stream with yt-dlp & connecting AI engine...");
+        try {
+            const res = await fetch("http://localhost:8000/set_source", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ source: newSource }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setActiveSourceInfo(data.info);
+                setStreamTimestamp(Date.now());
+                setStreamError(false);
+                setSourceStatusMsg("");
+                showToast(`Connected to: ${data.info?.display_name || newSource}`);
+                if (data.info?.source_type === "youtube") {
+                    setYoutubeUrl("");
+                }
+            } else {
+                const cleaned = cleanErrorMsg(data.message || "Could not switch source");
+                setSourceStatusMsg(`Error: ${cleaned}`);
+                showToast(`Failed: ${cleaned.slice(0, 50)}...`);
+            }
+        } catch (err) {
+            setSourceStatusMsg("Error: AI Engine is offline. Start python track_webcam.py first.");
+            showToast("AI engine is offline or unreachable on port 8000.");
+        } finally {
+            setSourceLoading(false);
+        }
+    };
+
+    // Live tuning of crowd detection sensitivity
+    const handleSetDetectionConfig = async (conf, imgsz) => {
+        try {
+            const res = await fetch("http://localhost:8000/set_detection_config", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ conf, imgsz }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setActiveSourceInfo((prev) => ({ ...prev, conf, imgsz }));
+                showToast(`Detection set to: ${conf <= 0.10 ? "Ultra-Crowd Mode" : conf <= 0.18 ? "Dense Crowd Mode" : "Standard Mode"} (conf=${conf})`);
+            }
+        } catch (err) {
+            showToast("AI engine is offline or unreachable on port 8000.");
+        }
     };
 
     // Load registered events from storage / API
@@ -279,7 +447,7 @@ function Dashboard() {
                                 style={{ cursor: "pointer" }}
                             >
                                 <span className={streamError ? "dot-red" : "dot-green"} />
-                                <span>Camera 01 - Main Entrance</span>
+                                <span>{activeSourceInfo.display_name || "Camera 01 - Main Entrance"}</span>
                             </div>
                         </div>
 
@@ -291,7 +459,7 @@ function Dashboard() {
                                 style={{ cursor: "pointer" }}
                             >
                                 <span className={streamError ? "dot-red" : "badge-live-dot"} />
-                                {streamError ? "OFFLINE" : "LIVE"}
+                                {streamError ? "OFFLINE" : (activeSourceInfo.source_type === "youtube" ? "YOUTUBE" : "LIVE")}
                             </div>
                             <button
                                 className="btn-expand-icon"
@@ -300,6 +468,212 @@ function Dashboard() {
                                 aria-label="Expand camera view"
                             >
                                 ⤢
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Video Source Control Bar */}
+                    <div className="video-source-panel">
+                        <div className="video-source-top-row">
+                            <div className="active-source-badge">
+                                <span className={streamError ? "dot-red" : "dot-green"} />
+                                <span className="active-source-type">
+                                    {activeSourceInfo.source_type === "youtube" ? "▶ YOUTUBE" : activeSourceInfo.source_type === "file" ? "📁 FILE" : "📷 WEBCAM"}
+                                </span>
+                                <span className="active-source-title" title={activeSourceInfo.video_title || activeSourceInfo.display_name}>
+                                    {activeSourceInfo.video_title || activeSourceInfo.display_name}
+                                </span>
+                                {activeSourceInfo.fps > 0 && (
+                                    <span className="active-source-fps">{activeSourceInfo.fps} FPS</span>
+                                )}
+                            </div>
+                            <div className="video-source-quick-actions">
+                                <button
+                                    type="button"
+                                    className={`btn-source-toggle ${activeSourceInfo.source_type === "webcam" ? "active" : ""}`}
+                                    onClick={() => handleSwitchSource(0)}
+                                    disabled={sourceLoading}
+                                    title="Switch to Laptop Webcam"
+                                >
+                                    📷 Webcam (0)
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* YouTube URL input form */}
+                        <form
+                            className="video-source-input-row"
+                            onSubmit={(e) => {
+                                e.preventDefault();
+                                handleSwitchSource(youtubeUrl);
+                            }}
+                        >
+                            <div className="youtube-input-wrap">
+                                <svg className="youtube-icon" width="18" height="18" viewBox="0 0 24 24" fill="#EF4444">
+                                    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                                </svg>
+                                <input
+                                    type="text"
+                                    className="youtube-url-input"
+                                    placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...)"
+                                    value={youtubeUrl}
+                                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                                    disabled={sourceLoading}
+                                />
+                                {youtubeUrl && (
+                                    <button
+                                        type="button"
+                                        className="btn-clear-input"
+                                        onClick={() => setYoutubeUrl("")}
+                                    >
+                                        ×
+                                    </button>
+                                )}
+                            </div>
+                            <button
+                                type="submit"
+                                className="btn-analyze-youtube"
+                                disabled={sourceLoading || !youtubeUrl.trim()}
+                            >
+                                {sourceLoading ? "⚡ Connecting..." : "⚡ Analyze YouTube"}
+                            </button>
+                        </form>
+
+                        {/* Status message or error banner */}
+                        {sourceStatusMsg && (
+                            <div className={`source-status-message ${sourceStatusMsg.startsWith("Error:") ? "error-banner" : "info-banner"}`}>
+                                {sourceLoading ? (
+                                    <div className="status-loading-row">
+                                        <span className="source-spinner" />
+                                        <span>{sourceStatusMsg}</span>
+                                    </div>
+                                ) : (
+                                    <div className="status-error-container">
+                                        <div className="status-error-header">
+                                            <span className="status-error-icon">⚠️</span>
+                                            <span className="status-error-text">
+                                                {cleanErrorMsg(sourceStatusMsg.replace(/^Error:\s*/, ""))}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                className="btn-dismiss-status"
+                                                onClick={() => setSourceStatusMsg("")}
+                                                title="Dismiss error message"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
+                                        <div className="status-error-actions">
+                                            <span className="status-fallback-lbl">Quick Recovery:</span>
+                                            <button
+                                                type="button"
+                                                className="btn-error-fallback"
+                                                onClick={() => handleSwitchSource(0)}
+                                            >
+                                                📷 Switch to Webcam
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="btn-error-fallback"
+                                                onClick={() => handleSwitchSource("https://www.youtube.com/watch?v=HpdO5Kq3o8Y")}
+                                            >
+                                                🚶 Shibuya Crossing
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="btn-error-fallback"
+                                                onClick={() => handleSwitchSource("crowd_test.mp4")}
+                                            >
+                                                📁 Local MP4
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* 1-Click Test Presets */}
+                        <div className="video-presets-row">
+                            <span className="presets-label">Quick Test Presets:</span>
+                            <button
+                                type="button"
+                                className="btn-preset-chip"
+                                onClick={() => handleSwitchSource("https://www.youtube.com/watch?v=dQw4w9WgXcQ")}
+                                disabled={sourceLoading}
+                                title="Rick Astley 4K Remastered Test Stream"
+                            >
+                                🎵 Music Video
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-preset-chip"
+                                onClick={() => handleSwitchSource("https://www.youtube.com/watch?v=HpdO5Kq3o8Y")}
+                                disabled={sourceLoading}
+                                title="Pedestrian Crossing Test Video"
+                            >
+                                🚶 Shibuya Crossing
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-preset-chip"
+                                onClick={() => handleSwitchSource("crowd_test.mp4")}
+                                disabled={sourceLoading}
+                                title="Local sample crowd video (crowd_test.mp4)"
+                            >
+                                📁 Local MP4
+                            </button>
+                        </div>
+
+                        {/* Crowd Detection Sensitivity Control & Visual Spatial Floor Overlay Toggle */}
+                        <div className="crowd-sensitivity-row">
+                            <span className="presets-label">Detection:</span>
+                            <button
+                                type="button"
+                                className={`btn-sensitivity-chip ${(activeSourceInfo.conf ?? 0.10) <= 0.10 ? "active" : ""}`}
+                                onClick={() => handleSetDetectionConfig(0.08, 1024)}
+                                title="Ultra-dense crowd mode: detects all occluded people, small background faces, and dense crowds"
+                            >
+                                🔥 Ultra-Crowd
+                            </button>
+                            <button
+                                type="button"
+                                className={`btn-sensitivity-chip ${(activeSourceInfo.conf ?? 0.10) > 0.10 && (activeSourceInfo.conf ?? 0.10) <= 0.18 ? "active" : ""}`}
+                                onClick={() => handleSetDetectionConfig(0.15, 960)}
+                                title="Balanced mode for standard crowds"
+                            >
+                                👥 Dense Crowd
+                            </button>
+                            <button
+                                type="button"
+                                className={`btn-sensitivity-chip ${(activeSourceInfo.conf ?? 0.10) > 0.18 ? "active" : ""}`}
+                                onClick={() => handleSetDetectionConfig(0.25, 640)}
+                                title="Standard mode for entrance doors with few people"
+                            >
+                                🚪 Standard
+                            </button>
+                            <button
+                                type="button"
+                                className={`btn-sensitivity-chip btn-box-toggle ${activeSourceInfo.show_bounding_boxes ? "active" : ""}`}
+                                onClick={handleToggleBoundingBoxes}
+                                title="Toggle bounded green boxes for people & spatial regions (Shortcut: Ctrl + B)"
+                            >
+                                {activeSourceInfo.show_bounding_boxes ? "📦 Boxes: ON (Ctrl+B)" : "📦 Boxes: OFF (Ctrl+B)"}
+                            </button>
+                            <button
+                                type="button"
+                                className={`btn-sensitivity-chip btn-overlay-toggle ${activeSourceInfo.show_spatial_overlay ? "active" : ""}`}
+                                onClick={handleToggleSpatialOverlay}
+                                title="Toggle visual floor polygons and obstacle boxes on camera feed"
+                            >
+                                {activeSourceInfo.show_spatial_overlay ? "🟢 Floor: ON" : "⚪ Floor: OFF"}
+                            </button>
+                            <button
+                                type="button"
+                                className={`btn-sensitivity-chip btn-roi-toggle ${activeSourceInfo.active_roi ? "active" : ""}`}
+                                onClick={() => handleSetRoi(activeSourceInfo.active_roi ? null : "news")}
+                                title="Crop directly to crowd footage in TV news broadcasts to eliminate studio anchors and boost resolution on distant people"
+                            >
+                                {activeSourceInfo.active_roi ? "🎯 News Crop: ON" : "🎯 News Crop: OFF"}
                             </button>
                         </div>
                     </div>

@@ -1,3 +1,7 @@
+param(
+    [string]$Source = $null
+)
+
 # =========================================================
 # AI CROWD INTELLIGENCE - AUTOMATIC CAMERA STARTUP
 # =========================================================
@@ -57,11 +61,24 @@ if (-not $Cloudflared) {
 # START AI ENGINE
 # ---------------------------------------------------------
 
-Write-Host "Starting AI engine..." -ForegroundColor Green
+if (-not $Source) {
+    Write-Host ""
+    Write-Host "[SOURCE SELECTION]" -ForegroundColor Cyan
+    Write-Host "Press ENTER for Laptop Webcam (0)" -ForegroundColor Gray
+    Write-Host "Or paste a YouTube video/stream link" -ForegroundColor Gray
+    $SourceInput = Read-Host "Video Source [default: 0]"
+    if ([string]::IsNullOrWhiteSpace($SourceInput)) {
+        $Source = "0"
+    } else {
+        $Source = $SourceInput.Trim()
+    }
+}
+
+Write-Host "Starting AI engine with source: $Source..." -ForegroundColor Green
 
 Start-Process `
     -FilePath "cmd.exe" `
-    -ArgumentList "/k python track_webcam.py --event-id $EventId" `
+    -ArgumentList "/k python track_webcam.py --event-id $EventId --source `"$Source`"" `
     -WorkingDirectory $ProjectPath
 
 
