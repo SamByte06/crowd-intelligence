@@ -11,19 +11,21 @@ import EventFollowPage from './pages/EventFollowPage'
 export default function App() {
   return (
     <Routes>
-      {/* Standalone Public Attendee & Event Follower Views */}
+      {/* Primary Public Attendee Landing Page & Event Follower Views */}
+      <Route path="/" element={<PublicEventsList />} />
       <Route path="/events" element={<PublicEventsList />} />
       <Route path="/events/:venueId" element={<EventFollowPage />} />
       <Route path="/live/:venueId" element={<EventFollowPage />} />
 
       {/* Admin and Facility Operator Portal */}
       <Route element={<Layout />}>
-        {/* Quick Setup and Primary Entry-Exit Input */}
-        <Route path="/" element={<GiveInputs />} />
+        {/* Create New Facility / Event Input */}
         <Route path="/inputs" element={<GiveInputs />} />
+        <Route path="/admin/new" element={<GiveInputs />} />
 
         {/* Live Operational Dashboard */}
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/admin" element={<Navigate to="/dashboard" replace />} />
         <Route path="/venues/:venueId/dashboard" element={<Dashboard />} />
 
         {/* Venue and Gate Management */}
@@ -33,7 +35,7 @@ export default function App() {
         <Route path="/venues/:venueId/gates" element={<GateManagement />} />
       </Route>
 
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }

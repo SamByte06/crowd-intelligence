@@ -75,10 +75,10 @@ export default function Layout() {
               </div>
               <div className="flex flex-col leading-none">
                 <span className="text-base font-extrabold tracking-tight text-slate-900 group-hover:text-blue-600 transition-colors">
-                  ENTRY &amp; EXIT
+                  AI CROWD INTELLIGENCE
                 </span>
                 <span className="text-[9px] font-semibold tracking-wider text-slate-400 uppercase mt-0.5">
-                  CROWD MONITORING SYSTEM
+                  ENTRY &amp; EXIT MONITORING SYSTEM
                 </span>
               </div>
             </Link>
