@@ -1,47 +1,62 @@
-# Logs
-logs
-*.log
-*.tmp
-cloudflare_*.txt
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-
-# YOLO / ML model files
-*.pt
-*.pth
-*.onnx
-*.weights
+# AI Crowd Intelligence — Entry-Exit Management System
 
 # Python
 __pycache__/
-*.pyc
-.venv/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
 venv/
+.venv/
+env/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Model downloads & media uploads
+*.part
+media_uploads/
+backend/media_uploads/
+*.mp4
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # Node
 node_modules/
+frontend/dist/
 
-# Environment files
-.env
-.env.*
+# YOLO models
+*.pt
+*.onnx
+*.engine
 
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temp
+temp_uploads/
+scratch/
