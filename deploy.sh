@@ -72,3 +72,4 @@ else
     echo "❌ Deployment failed. Check logs using: docker compose logs"
     exit 1
 fi
+

@@ -151,12 +151,31 @@ def health_check(db: Session = Depends(get_db)):
     }
 
 
-@app.get("/")
-def root():
-    """Root endpoint."""
-    return {
-        "name": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "docs": "/docs",
-        "health": "/api/v1/health",
-    }
+# Mount and serve built frontend static files if present (for single-container/HuggingFace deployment)
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+static_dir = Path(__file__).resolve().parent.parent / "static"
+if static_dir.exists() and (static_dir / "index.html").exists():
+    if (static_dir / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api") or full_path.startswith("ws") or full_path == "health":
+            return None
+        target_file = static_dir / full_path
+        if target_file.is_file():
+            return FileResponse(str(target_file))
+        return FileResponse(str(static_dir / "index.html"))
+else:
+    @app.get("/")
+    def root():
+        """Root endpoint."""
+        return {
+            "name": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+            "docs": "/docs",
+            "health": "/api/v1/health",
+        }

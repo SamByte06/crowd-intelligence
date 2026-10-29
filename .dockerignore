@@ -1,0 +1,11 @@
+frontend/node_modules/
+frontend/dist/
+backend/media_uploads/
+backend/media_cache/
+backend/__pycache__/
+*.pyc
+.git/
+.venv/
+venv/
+crowd_intelligence.db*
+*.log

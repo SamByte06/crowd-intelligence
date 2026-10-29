@@ -105,3 +105,4 @@ In the web interface (**Gate Management** page):
 | **Restart System** | `docker compose restart` |
 | **Stop System** | `docker compose down` |
 | **Update to Latest Git Code** | `git pull && docker compose up --build -d` |
+
