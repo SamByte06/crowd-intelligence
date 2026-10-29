@@ -28,6 +28,8 @@ import {
   getSystemNotificationPermission,
   requestSystemNotificationPermission,
   sendSystemNotification,
+  updateLiveTimelineNotification,
+  sendUrgentAlertNotification,
   sendTestNotification
 } from '../services/systemNotification'
 
@@ -130,41 +132,94 @@ export default function EventFollowPage() {
     })
   }, [venueId])
 
-  // 3. Trigger Continuous System Notifications (pops in Windows Action Center / Android Drawer)
+  // Tracking refs for silent timeline vs urgent alarm separation
+  const lastTimelineTimeRef = useRef<number>(0)
+  const lastTimelinePercentRef = useRef<number>(-1)
+  const lastAlertLevelRef = useRef<'NORMAL' | 'WARNING' | 'CRITICAL'>('NORMAL')
+  const lastAlertTimeRef = useRef<number>(0)
+
+  // 3A. Persistent Silent Live Timeline Notification (Flipkart / Delivery-Tracker Style)
+  // Updates smoothly in-place in the notification drawer WITHOUT buzzing, ringing, or creating multiple cards
   useEffect(() => {
-    if (!venue || !occupancy || !forecast || !isFollowing) return
+    if (!venue || !occupancy || !isFollowing) return
 
+    const now = Date.now()
     const percent = occupancy.percentage || 0
-    let alertMsg = ''
-    let severity: 'warning' | 'critical' | 'info' = 'info'
+    const currentCount = occupancy.current_occupancy || 0
+    const cap = venue.effective_capacity || occupancy.effective_capacity || 1000
+    const timeToCap = forecast?.time_to_capacity_minutes ?? null
+    const netInflow = flow?.net_inflow_per_min ?? (forecast?.net_inflow_rate || 0)
 
+    // Update timeline if at least 10 seconds have passed OR percent changed by >= 1%
+    const timeElapsed = now - lastTimelineTimeRef.current >= 10000
+    const percentChanged = Math.abs(percent - lastTimelinePercentRef.current) >= 1
+
+    if (timeElapsed || percentChanged) {
+      lastTimelineTimeRef.current = now
+      lastTimelinePercentRef.current = percent
+
+      updateLiveTimelineNotification(
+        venue.name,
+        percent,
+        currentCount,
+        cap,
+        timeToCap,
+        netInflow
+      )
+    }
+  }, [
+    occupancy?.percentage,
+    occupancy?.current_occupancy,
+    forecast?.time_to_capacity_minutes,
+    flow?.net_inflow_per_min,
+    isFollowing,
+    venue?.name
+  ])
+
+  // 3B. Separate Urgent Alarms (Moderate / Warning & Critical)
+  // Only fires when crossing a threshold boundary (e.g. crossing 75% or 90%) with 5-min cooldown
+  useEffect(() => {
+    if (!venue || !occupancy || !isFollowing) return
+
+    const now = Date.now()
+    const percent = occupancy.percentage || 0
+    const timeToCap = forecast?.time_to_capacity_minutes ?? null
+    const inflow = forecast?.net_inflow_rate ?? 0
+
+    let currentLevel: 'NORMAL' | 'WARNING' | 'CRITICAL' = 'NORMAL'
     if (percent >= 90) {
-      alertMsg = `🚨 CRITICAL ALERT: ${venue.name} is ${percent}% FULL! Expected to reach capacity in ${forecast.time_to_capacity_minutes || 5} mins.`
-      severity = 'critical'
-    } else if (percent >= 75) {
-      alertMsg = `⚠️ RUSH WARNING: ${venue.name} is now ${percent}% full. High inflow detected at entrance gates.`
-      severity = 'warning'
-    } else if (forecast.time_to_capacity_minutes && forecast.time_to_capacity_minutes <= 15 && forecast.net_inflow_rate > 10) {
-      alertMsg = `⏱️ SURGE ALERT: ${venue.name} is filling up quickly. Projected to reach capacity in ~${forecast.time_to_capacity_minutes} minutes!`
-      severity = 'warning'
+      currentLevel = 'CRITICAL'
+    } else if (percent >= 75 || (timeToCap !== null && timeToCap <= 15 && inflow > 10)) {
+      currentLevel = 'WARNING'
     }
 
-    if (alertMsg && alertMsg !== lastNotificationAlert && alertMsg !== lastStateRef.current) {
-      lastStateRef.current = alertMsg
-      setLastNotificationAlert(alertMsg)
+    const prevLevel = lastAlertLevelRef.current
+    const cooldownPassed = now - lastAlertTimeRef.current >= 300000 // 5 minutes cooldown
 
-      if (soundEnabled) {
-        playAlertChime(severity)
+    if (currentLevel !== 'NORMAL' && (currentLevel !== prevLevel || cooldownPassed)) {
+      lastAlertLevelRef.current = currentLevel
+      lastAlertTimeRef.current = now
+
+      if (currentLevel === 'CRITICAL') {
+        const msg = `🚨 Critical Capacity Alarm: ${venue.name} has reached ${percent}% occupancy! Area expected to reach max limit in ~${Math.round(timeToCap || 5)} minutes. Expect gate holds.`
+        if (soundEnabled) playAlertChime('critical')
+        sendUrgentAlertNotification(venue.name, 'CRITICAL', msg)
+      } else if (currentLevel === 'WARNING') {
+        const msg = `⚠️ Moderate Rush Warning: ${venue.name} is now ${percent}% full. High inflow speed detected (+${inflow}/min). Queues forming at entry gates.`
+        if (soundEnabled) playAlertChime('warning')
+        sendUrgentAlertNotification(venue.name, 'WARNING', msg)
       }
-
-      // Send true system-level notification via Service Worker
-      sendSystemNotification(`Crowd Alert: ${venue.name}`, {
-        body: alertMsg,
-        tag: 'live-crowd-alert',
-        requireInteraction: true,
-      })
+    } else if (currentLevel === 'NORMAL' && prevLevel !== 'NORMAL') {
+      lastAlertLevelRef.current = 'NORMAL'
     }
-  }, [occupancy?.percentage, forecast?.time_to_capacity_minutes, isFollowing, soundEnabled, venue?.name])
+  }, [
+    occupancy?.percentage,
+    forecast?.time_to_capacity_minutes,
+    forecast?.net_inflow_rate,
+    isFollowing,
+    soundEnabled,
+    venue?.name
+  ])
 
   // 4. Toggle Follow Handler
   const handleToggleFollow = async () => {
@@ -175,12 +230,21 @@ export default function EventFollowPage() {
     if (nextState) {
       const granted = await requestSystemNotificationPermission()
       setSystemPermission(getSystemNotificationPermission())
-      if (granted) {
-        await sendSystemNotification(`Live Follow Active: ${venue?.name || 'Venue'}`, {
-          body: 'You are now following live crowd intelligence. Alerts will pop up in your device notification tray even when using other apps.',
-          tag: 'follow-active',
-          requireInteraction: false,
-        })
+      if (granted && venue && occupancy) {
+        const percent = occupancy.percentage || 0
+        const currentCount = occupancy.current_occupancy || 0
+        const cap = venue.effective_capacity || occupancy.effective_capacity || 1000
+        const timeToCap = forecast?.time_to_capacity_minutes ?? null
+        const netInflow = flow?.net_inflow_per_min ?? (forecast?.net_inflow_rate || 0)
+
+        await updateLiveTimelineNotification(
+          venue.name,
+          percent,
+          currentCount,
+          cap,
+          timeToCap,
+          netInflow
+        )
       }
       if (soundEnabled) playAlertChime('info')
     }
@@ -425,7 +489,7 @@ export default function EventFollowPage() {
               </div>
               <p className="text-xs text-slate-500 mt-0.5 max-w-xl">
                 {systemPermission === 'granted'
-                  ? 'Upcoming crowd warnings and time-to-full forecasts will pop up directly in your Windows Notification Center or Android Notification Shade even if you switch to another app.'
+                  ? 'Active: Live timeline quietly updates crowd status in-place in your notification drawer (zero buzz spam). Separate audible alarms ring only when crowd crosses 75% or 90% capacity.'
                   : 'Receive real-time push alerts in your phone notification shade or Windows action center even when using other apps or when the browser is minimized.'}
               </p>
             </div>

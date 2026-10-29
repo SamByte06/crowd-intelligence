@@ -46,6 +46,8 @@ export interface SystemNotificationOptions {
   data?: any
   requireInteraction?: boolean
   silent?: boolean
+  renotify?: boolean
+  vibrate?: number[]
 }
 
 /**
@@ -64,14 +66,16 @@ export async function sendSystemNotification(
     return false
   }
 
+  const isTimeline = options.tag === 'live-crowd-timeline' || options.renotify === false
   const notificationPayload = {
     body: options.body,
     icon: '/favicon.svg',
     badge: '/favicon.svg',
     tag: options.tag || 'crowd-status-alert',
-    renotify: true,
-    requireInteraction: options.requireInteraction ?? true, // Stays in Action Center
-    vibrate: [300, 100, 300, 100, 300],
+    renotify: options.renotify ?? !isTimeline,
+    silent: options.silent ?? isTimeline,
+    requireInteraction: options.requireInteraction ?? !isTimeline,
+    vibrate: options.vibrate ?? (isTimeline ? [] : [300, 100, 300]),
     data: options.data || { url: window.location.pathname },
   }
 
@@ -99,11 +103,72 @@ export async function sendSystemNotification(
 }
 
 /**
+ * Updates the persistent silent live timeline notification (Flipkart/Zomato style).
+ * Updates in-place without buzzing, ringing, or creating multiple cards.
+ */
+export async function updateLiveTimelineNotification(
+  venueName: string,
+  percent: number,
+  currentCount: number,
+  capacity: number,
+  timeToCapacity: number | null,
+  netInflow: number
+): Promise<boolean> {
+  const statusEmoji = percent >= 90 ? '🔴' : percent >= 75 ? '🟡' : '🟢'
+  const statusWord = percent >= 90 ? 'CRITICAL CAPACITY' : percent >= 75 ? 'HIGH RUSH' : 'SAFE FLOW'
+
+  const timeText =
+    percent >= 100
+      ? 'Area is 100% FULL'
+      : timeToCapacity !== null && timeToCapacity > 0
+      ? `Full in ~${Math.round(timeToCapacity)}m`
+      : 'Steady Flow'
+
+  const flowText = netInflow > 0 ? `+${netInflow}/m` : `${netInflow}/m`
+  const title = `${statusEmoji} ${statusWord}: ${venueName}`
+  
+  // Clean delivery-tracker / timeline layout
+  const body =
+    `⏱️ ${timeText}  |  👥 ${percent}% (${currentCount.toLocaleString()}/${capacity.toLocaleString()})\n` +
+    `⚡ Speed: ${flowText}  |  [Safe 🟢 ──> Rush 🟡 ──> Full 🔴]`
+
+  return sendSystemNotification(title, {
+    body,
+    tag: 'live-crowd-timeline', // Fixed tag ensures in-place update!
+    renotify: false,            // Zero buzz / zero re-ring!
+    silent: true,               // Completely silent background update!
+    requireInteraction: false,
+  })
+}
+
+/**
+ * Dispatches an urgent threshold alarm (Moderate/Warning or Critical).
+ * Sends separately with ring & vibrate only when a threshold boundary is breached.
+ */
+export async function sendUrgentAlertNotification(
+  venueName: string,
+  severity: 'WARNING' | 'CRITICAL',
+  message: string
+): Promise<boolean> {
+  const iconEmoji = severity === 'CRITICAL' ? '🚨' : '⚠️'
+  const title = `${iconEmoji} ${severity === 'CRITICAL' ? 'CRITICAL CROWD ALERT' : 'RUSH WARNING'} • ${venueName}`
+
+  return sendSystemNotification(title, {
+    body: message,
+    tag: `crowd-alert-${severity.toLowerCase()}`, // Distinct tag from timeline
+    renotify: true,                               // Buzzes and rings for real danger!
+    silent: false,
+    requireInteraction: true,                     // Remains in action center
+    vibrate: severity === 'CRITICAL' ? [400, 150, 400, 150, 400] : [300, 100, 300],
+  })
+}
+
+/**
  * Triggers a test system notification so user can verify it pops up in their OS tray.
  */
 export async function sendTestNotification(venueName: string = 'Current Venue'): Promise<boolean> {
   return sendSystemNotification(`🔔 Notification Test: ${venueName}`, {
-    body: 'System notifications are active! You will receive live alerts here even if you switch apps or minimize this tab.',
+    body: 'System notifications are active! Live timeline updates quietly in place, and urgent alerts buzz separately.',
     tag: 'test-notification',
     requireInteraction: false,
   })

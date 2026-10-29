@@ -36,11 +36,15 @@ self.addEventListener('notificationclick', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
     const { title, options } = event.data;
+    const isSilentTimeline = options?.tag === 'live-crowd-timeline' || options?.renotify === false;
+
     self.registration.showNotification(title, {
       icon: '/favicon.svg',
       badge: '/favicon.svg',
-      vibrate: [300, 100, 300, 100, 300],
-      requireInteraction: true, // Keeps visible in Windows Action Center / Android Drawer
+      vibrate: isSilentTimeline ? [] : [300, 100, 300],
+      requireInteraction: !isSilentTimeline,
+      renotify: !isSilentTimeline,
+      silent: isSilentTimeline,
       ...options,
     });
   }
