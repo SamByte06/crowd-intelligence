@@ -17,9 +17,19 @@ import {
   Volume2,
   VolumeX,
   Activity,
-  Layers
+  Layers,
+  Smartphone,
+  Laptop,
+  CheckCircle2
 } from 'lucide-react'
 import { venueApi, gateApi, monitorApi, connectWebSocket } from '../services/api'
+import {
+  registerServiceWorker,
+  getSystemNotificationPermission,
+  requestSystemNotificationPermission,
+  sendSystemNotification,
+  sendTestNotification
+} from '../services/systemNotification'
 
 // Gentle synthesized audio chime using Web Audio API (Zero external mp3 needed)
 function playAlertChime(severity: 'warning' | 'critical' | 'info') {
@@ -62,13 +72,20 @@ export default function EventFollowPage() {
   const [isFollowing, setIsFollowing] = useState<boolean>(() => {
     return localStorage.getItem(`follow_${venueId}`) === 'true'
   })
+  const [systemPermission, setSystemPermission] = useState<NotificationPermission>('default')
+  const [testSent, setTestSent] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [copiedLink, setCopiedLink] = useState(false)
   const [lastNotificationAlert, setLastNotificationAlert] = useState<string>('')
 
   const lastStateRef = useRef<string>('')
 
-  // 1. Initial Load
+  // 1. Initial Load & Service Worker Registration
+  useEffect(() => {
+    registerServiceWorker()
+    setSystemPermission(getSystemNotificationPermission())
+  }, [])
+
   const fetchData = async () => {
     if (!venueId) return
     try {
@@ -113,7 +130,7 @@ export default function EventFollowPage() {
     })
   }, [venueId])
 
-  // 3. Trigger Continuous Notifications when user is following
+  // 3. Trigger Continuous System Notifications (pops in Windows Action Center / Android Drawer)
   useEffect(() => {
     if (!venue || !occupancy || !forecast || !isFollowing) return
 
@@ -122,13 +139,13 @@ export default function EventFollowPage() {
     let severity: 'warning' | 'critical' | 'info' = 'info'
 
     if (percent >= 90) {
-      alertMsg = `CRITICAL ALERT: ${venue.name} is ${percent}% FULL! Expected to reach capacity in ${forecast.time_to_capacity_minutes || 5} mins.`
+      alertMsg = `🚨 CRITICAL ALERT: ${venue.name} is ${percent}% FULL! Expected to reach capacity in ${forecast.time_to_capacity_minutes || 5} mins.`
       severity = 'critical'
     } else if (percent >= 75) {
-      alertMsg = `RUSH WARNING: ${venue.name} is now ${percent}% full. High inflow detected at entrance gates.`
+      alertMsg = `⚠️ RUSH WARNING: ${venue.name} is now ${percent}% full. High inflow detected at entrance gates.`
       severity = 'warning'
     } else if (forecast.time_to_capacity_minutes && forecast.time_to_capacity_minutes <= 15 && forecast.net_inflow_rate > 10) {
-      alertMsg = `SURGE ALERT: ${venue.name} is filling up quickly. Projected to reach capacity in ~${forecast.time_to_capacity_minutes} minutes!`
+      alertMsg = `⏱️ SURGE ALERT: ${venue.name} is filling up quickly. Projected to reach capacity in ~${forecast.time_to_capacity_minutes} minutes!`
       severity = 'warning'
     }
 
@@ -140,17 +157,12 @@ export default function EventFollowPage() {
         playAlertChime(severity)
       }
 
-      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        try {
-          new Notification(`Live Alert: ${venue.name}`, {
-            body: alertMsg,
-            icon: '/favicon.ico',
-            tag: 'crowd-status-alert',
-          })
-        } catch (e) {
-          console.debug('Notification push error:', e)
-        }
-      }
+      // Send true system-level notification via Service Worker
+      sendSystemNotification(`Crowd Alert: ${venue.name}`, {
+        body: alertMsg,
+        tag: 'live-crowd-alert',
+        requireInteraction: true,
+      })
     }
   }, [occupancy?.percentage, forecast?.time_to_capacity_minutes, isFollowing, soundEnabled, venue?.name])
 
@@ -161,14 +173,31 @@ export default function EventFollowPage() {
     localStorage.setItem(`follow_${venueId}`, String(nextState))
 
     if (nextState) {
-      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted') {
-        try {
-          await Notification.requestPermission()
-        } catch (e) {
-          console.debug('Permission request error:', e)
-        }
+      const granted = await requestSystemNotificationPermission()
+      setSystemPermission(getSystemNotificationPermission())
+      if (granted) {
+        await sendSystemNotification(`Live Follow Active: ${venue?.name || 'Venue'}`, {
+          body: 'You are now following live crowd intelligence. Alerts will pop up in your device notification tray even when using other apps.',
+          tag: 'follow-active',
+          requireInteraction: false,
+        })
       }
       if (soundEnabled) playAlertChime('info')
+    }
+  }
+
+  // 5. Test Notification Trigger
+  const handleSendTestNotification = async () => {
+    let granted = systemPermission === 'granted'
+    if (!granted) {
+      granted = await requestSystemNotificationPermission()
+      setSystemPermission(getSystemNotificationPermission())
+    }
+    if (granted) {
+      await sendTestNotification(venue?.name || 'Current Venue')
+      if (soundEnabled) playAlertChime('info')
+      setTestSent(true)
+      setTimeout(() => setTestSent(false), 3500)
     }
   }
 
@@ -360,6 +389,68 @@ export default function EventFollowPage() {
               <div className="font-bold text-sm leading-tight">{statusBadge.label}</div>
               <p className="text-xs mt-0.5 opacity-90">{statusBadge.desc}</p>
             </div>
+          </div>
+        </div>
+
+        {/* Device System Notifications Panel (Windows Action Center & Android Notification Drawer) */}
+        <div className="rounded-xl bg-white border border-slate-200 p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div
+              className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                systemPermission === 'granted' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
+              }`}
+            >
+              {systemPermission === 'granted' ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              ) : (
+                <Smartphone className="w-5 h-5 text-blue-600" />
+              )}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm text-slate-900">
+                  {systemPermission === 'granted'
+                    ? 'Device System Notifications: Active'
+                    : 'Enable Device System Notifications'}
+                </span>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                    systemPermission === 'granted'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                  }`}
+                >
+                  {systemPermission === 'granted' ? 'NOTIFICATION SHADE ACTIVE' : 'SETUP REQUIRED'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5 max-w-xl">
+                {systemPermission === 'granted'
+                  ? 'Upcoming crowd warnings and time-to-full forecasts will pop up directly in your Windows Notification Center or Android Notification Shade even if you switch to another app.'
+                  : 'Receive real-time push alerts in your phone notification shade or Windows action center even when using other apps or when the browser is minimized.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {systemPermission !== 'granted' ? (
+              <button
+                type="button"
+                onClick={handleSendTestNotification}
+                className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs"
+              >
+                Enable System Alerts
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSendTestNotification}
+                disabled={testSent}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-all"
+              >
+                {testSent ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Bell className="w-3.5 h-3.5 text-blue-600" />}
+                <span>{testSent ? 'Alert Sent to OS!' : 'Send Test Notification'}</span>
+              </button>
+            )}
           </div>
         </div>
 
