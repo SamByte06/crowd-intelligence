@@ -5,10 +5,18 @@ import Dashboard from './pages/Dashboard'
 import VenueList from './pages/VenueList'
 import VenueSetup from './pages/VenueSetup'
 import GateManagement from './pages/GateManagement'
+import PublicEventsList from './pages/PublicEventsList'
+import EventFollowPage from './pages/EventFollowPage'
 
 export default function App() {
   return (
     <Routes>
+      {/* Standalone Public Attendee & Event Follower Views */}
+      <Route path="/events" element={<PublicEventsList />} />
+      <Route path="/events/:venueId" element={<EventFollowPage />} />
+      <Route path="/live/:venueId" element={<EventFollowPage />} />
+
+      {/* Admin and Facility Operator Portal */}
       <Route element={<Layout />}>
         {/* Quick Setup and Primary Entry-Exit Input */}
         <Route path="/" element={<GiveInputs />} />

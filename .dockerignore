@@ -9,3 +9,4 @@ backend/__pycache__/
 venv/
 crowd_intelligence.db*
 *.log
+

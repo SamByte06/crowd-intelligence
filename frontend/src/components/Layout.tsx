@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, SlidersHorizontal, Building2, ShieldCheck, RefreshCw, Calendar, Settings } from 'lucide-react'
+import { LayoutDashboard, SlidersHorizontal, Building2, ShieldCheck, RefreshCw, Calendar, Settings, Compass } from 'lucide-react'
 import { monitorApi } from '../services/api'
 
 export default function Layout() {
@@ -100,6 +100,10 @@ export default function Layout() {
               <NavLink to="/venues" active={isVenuesActive}>
                 <Building2 className="w-3.5 h-3.5" />
                 <span>Venues</span>
+              </NavLink>
+              <NavLink to="/events" active={location.pathname.startsWith('/events')}>
+                <Compass className="w-3.5 h-3.5 text-blue-500" />
+                <span className="text-blue-700 font-semibold">Attendee View</span>
               </NavLink>
             </nav>
           </div>

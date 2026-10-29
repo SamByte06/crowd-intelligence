@@ -7,6 +7,7 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  Compass,
   DoorClosed,
   DoorOpen,
   Maximize2,
@@ -490,6 +491,16 @@ export default function Dashboard() {
           </button>
           <Link to={`/venues/${venue.id}/gates`} className="btn-secondary text-xs">
             <Settings className="h-4 w-4" />Gate settings
+          </Link>
+          <Link
+            to={`/events/${venue.id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="btn-secondary text-xs bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+            title="Open public attendee live view for this event"
+          >
+            <Compass className="h-4 w-4 text-blue-600" />
+            <span className="hidden sm:inline">Attendee View</span>
           </Link>
           <button
             type="button"
