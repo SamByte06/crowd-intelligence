@@ -1,10 +1,13 @@
 /**
- * System-Level Notification Service
+ * System-Level Notification & Background Keep-Alive Service
  * Dispatches notifications directly into the operating system notification shade:
  * - Windows Action Center / Notification Tray
  * - Android Notification Drawer
  * - macOS Notification Center
  */
+
+let keepAliveAudioCtx: AudioContext | null = null
+let keepAliveOsc: OscillatorNode | null = null
 
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
@@ -103,6 +106,85 @@ export async function sendSystemNotification(
 }
 
 /**
+ * Informs the Service Worker to autonomously monitor the venue in background.
+ * Works even if tab is frozen or user switched to Instagram / WhatsApp!
+ */
+export async function startBackgroundServiceWorkerMonitoring(
+  venueId: string,
+  venueName: string
+): Promise<void> {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return
+  try {
+    const reg = await navigator.serviceWorker.ready
+    if (reg && reg.active) {
+      reg.active.postMessage({
+        type: 'START_BACKGROUND_MONITOR',
+        venueId,
+        venueName,
+      })
+    }
+  } catch (e) {
+    console.debug('SW background monitor init note:', e)
+  }
+}
+
+export async function stopBackgroundServiceWorkerMonitoring(venueId: string): Promise<void> {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return
+  try {
+    const reg = await navigator.serviceWorker.ready
+    if (reg && reg.active) {
+      reg.active.postMessage({
+        type: 'STOP_BACKGROUND_MONITOR',
+        venueId,
+      })
+    }
+  } catch (e) {
+    console.debug('SW background monitor stop note:', e)
+  }
+}
+
+/**
+ * Starts an inaudible, silent AudioContext oscillator node.
+ * This instructs the OS / mobile browser NOT to suspend or kill the background tab
+ * when the user switches to Instagram, WhatsApp, or locks the phone.
+ */
+export function startAudioKeepAlive(): void {
+  try {
+    if (keepAliveAudioCtx) return
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+    if (!AudioContextClass) return
+
+    keepAliveAudioCtx = new AudioContextClass()
+    const gainNode = keepAliveAudioCtx.createGain()
+    gainNode.gain.setValueAtTime(0.00001, keepAliveAudioCtx.currentTime) // Inaudible zero volume
+
+    keepAliveOsc = keepAliveAudioCtx.createOscillator()
+    keepAliveOsc.frequency.setValueAtTime(1, keepAliveAudioCtx.currentTime)
+    keepAliveOsc.connect(gainNode)
+    gainNode.connect(keepAliveAudioCtx.destination)
+    keepAliveOsc.start()
+  } catch (e) {
+    console.debug('Audio keep-alive initialization note:', e)
+  }
+}
+
+export function stopAudioKeepAlive(): void {
+  try {
+    if (keepAliveOsc) {
+      keepAliveOsc.stop()
+      keepAliveOsc.disconnect()
+      keepAliveOsc = null
+    }
+    if (keepAliveAudioCtx) {
+      keepAliveAudioCtx.close()
+      keepAliveAudioCtx = null
+    }
+  } catch (e) {
+    console.debug('Audio keep-alive cleanup note:', e)
+  }
+}
+
+/**
  * Updates the persistent silent live timeline notification (Flipkart/Zomato style).
  * Updates in-place without buzzing, ringing, or creating multiple cards.
  */
@@ -126,17 +208,15 @@ export async function updateLiveTimelineNotification(
 
   const flowText = netInflow > 0 ? `+${netInflow}/m` : `${netInflow}/m`
   const title = `${statusEmoji} ${statusWord}: ${venueName}`
-  
-  // Clean delivery-tracker / timeline layout
   const body =
     `⏱️ ${timeText}  |  👥 ${percent}% (${currentCount.toLocaleString()}/${capacity.toLocaleString()})\n` +
     `⚡ Speed: ${flowText}  |  [Safe 🟢 ──> Rush 🟡 ──> Full 🔴]`
 
   return sendSystemNotification(title, {
     body,
-    tag: 'live-crowd-timeline', // Fixed tag ensures in-place update!
-    renotify: false,            // Zero buzz / zero re-ring!
-    silent: true,               // Completely silent background update!
+    tag: 'live-crowd-timeline',
+    renotify: false,
+    silent: true,
     requireInteraction: false,
   })
 }
@@ -151,14 +231,14 @@ export async function sendUrgentAlertNotification(
   message: string
 ): Promise<boolean> {
   const iconEmoji = severity === 'CRITICAL' ? '🚨' : '⚠️'
-  const title = `${iconEmoji} ${severity === 'CRITICAL' ? 'CRITICAL CROWD ALERT' : 'RUSH WARNING'} • ${venueName}`
+  const title = `${iconEmoji} ${severity === 'CRITICAL' ? 'CRITICAL CROWD ALARM' : 'RUSH WARNING'} • ${venueName}`
 
   return sendSystemNotification(title, {
     body: message,
-    tag: `crowd-alert-${severity.toLowerCase()}`, // Distinct tag from timeline
-    renotify: true,                               // Buzzes and rings for real danger!
+    tag: `crowd-alert-${severity.toLowerCase()}`,
+    renotify: true,
     silent: false,
-    requireInteraction: true,                     // Remains in action center
+    requireInteraction: true,
     vibrate: severity === 'CRITICAL' ? [400, 150, 400, 150, 400] : [300, 100, 300],
   })
 }

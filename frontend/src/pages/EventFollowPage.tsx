@@ -30,7 +30,11 @@ import {
   sendSystemNotification,
   updateLiveTimelineNotification,
   sendUrgentAlertNotification,
-  sendTestNotification
+  sendTestNotification,
+  startBackgroundServiceWorkerMonitoring,
+  stopBackgroundServiceWorkerMonitoring,
+  startAudioKeepAlive,
+  stopAudioKeepAlive
 } from '../services/systemNotification'
 
 // Gentle synthesized audio chime using Web Audio API (Zero external mp3 needed)
@@ -131,6 +135,45 @@ export default function EventFollowPage() {
       }
     })
   }, [venueId])
+
+  // 2B. Background Web Worker & Anti-Suspension Keep-Alive
+  // Ensures sub-second live notifications even when user switches to Instagram/WhatsApp
+  useEffect(() => {
+    if (!venueId || !isFollowing) {
+      stopAudioKeepAlive()
+      stopBackgroundServiceWorkerMonitoring(venueId || '')
+      return
+    }
+
+    startAudioKeepAlive()
+
+    if (venue?.name) {
+      startBackgroundServiceWorkerMonitoring(venueId, venue.name)
+    }
+
+    let bgWorker: Worker | null = null
+    try {
+      bgWorker = new Worker('/bg-worker.js')
+      bgWorker.postMessage({ type: 'START', venueId })
+      bgWorker.onmessage = (e) => {
+        if (e.data?.type === 'STATE_UPDATE') {
+          if (e.data.occupancy) setOccupancy((prev: any) => ({ ...prev, ...e.data.occupancy }))
+          if (e.data.forecast) setForecast((prev: any) => ({ ...prev, ...e.data.forecast }))
+        }
+      }
+    } catch (err) {
+      console.debug('Web worker init note:', err)
+    }
+
+    return () => {
+      stopAudioKeepAlive()
+      stopBackgroundServiceWorkerMonitoring(venueId)
+      if (bgWorker) {
+        bgWorker.postMessage({ type: 'STOP' })
+        bgWorker.terminate()
+      }
+    }
+  }, [venueId, isFollowing, venue?.name])
 
   // Tracking refs for silent timeline vs urgent alarm separation
   const lastTimelineTimeRef = useRef<number>(0)
