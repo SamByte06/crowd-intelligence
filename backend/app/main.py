@@ -132,6 +132,7 @@ app.include_router(monitoring.router, prefix="/api/v1")
 app.include_router(websocket.router, prefix="/api/v1")
 
 
+@app.get("/health")
 @app.get("/api/v1/health")
 def health_check(db: Session = Depends(get_db)):
     """Application health check."""

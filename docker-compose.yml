@@ -6,32 +6,41 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: crowd_backend
-    restart: unless-stopped
+    restart: always
     ports:
       - "8000:8000"
     environment:
       - HOST=0.0.0.0
       - PORT=8000
-      - DATABASE_URL=sqlite:///./crowd_intel.db
-      - CORS_ORIGINS=["http://localhost:5173","http://localhost:3000","http://localhost:80"]
+      - DATABASE_URL=sqlite:////app/data/crowd_intelligence.db
+      - CORS_ORIGINS=*
       - LOG_LEVEL=INFO
-      - YOLO_MODEL=yolov8n.pt
+      - USE_HEAD_TRACKING=true
+      - HEAD_MODEL_PATH=/app/11s-head.pt
+      - TRACKER_TYPE=bytetrack.yaml
+      - YOLO_DEVICE=auto
     volumes:
-      - ./backend/data:/app/data
-      - ./backend/crowd_intel.db:/app/crowd_intel.db
+      - crowd_data:/app/data
+      - ./backend/media_uploads:/app/media_uploads
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
+      interval: 20s
+      timeout: 5s
       retries: 3
+      start_period: 25s
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: crowd_frontend
-    restart: unless-stopped
+    restart: always
     ports:
-      - "3000:80"
+      - "80:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+
+volumes:
+  crowd_data:
+    driver: local

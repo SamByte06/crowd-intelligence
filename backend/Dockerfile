@@ -2,10 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for OpenCV and video handling
+# Install system dependencies for OpenCV, PyTorch, and video processing
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
+    libgomp1 \
+    ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

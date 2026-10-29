@@ -11,6 +11,16 @@ connect_args = {}
 if settings.DATABASE_URL.startswith("sqlite"):
     connect_args["check_same_thread"] = False
     connect_args["timeout"] = 15.0
+    try:
+        import os
+        raw_path = settings.DATABASE_URL.replace("sqlite:///", "").lstrip("/")
+        if raw_path and not raw_path.startswith(":memory:"):
+            # Ensure folder exists
+            dir_name = os.path.dirname(os.path.abspath(raw_path if os.name == 'nt' else "/" + raw_path))
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
+    except Exception:
+        pass
 
 engine = create_engine(
     settings.DATABASE_URL,
