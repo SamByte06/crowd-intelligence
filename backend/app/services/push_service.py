@@ -120,14 +120,16 @@ def remove_subscription(venue_id: str, endpoint: str):
         _save_subscriptions()
 
 
-def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WARNING", tag: str = "crowd-alert"):
+def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WARNING", tag: str = "crowd-alert") -> int:
     """
     Directly deliver native Web Push notification to all subscriber devices.
     Pushes via Google FCM / Mozilla Push Service straight into device OS notification bar.
+    Returns the number of devices successfully messaged.
     """
     subscribers = _subscriptions.get(venue_id, [])
     if not subscribers:
-        return
+        logger.info(f"broadcast_web_push: no subscribers for venue {venue_id}")
+        return 0
 
     payload = json.dumps({
         "title": title,
@@ -144,26 +146,31 @@ def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WA
     })
 
     expired_endpoints = []
+    sent_count = 0
 
     for sub in subscribers:
         try:
+            logger.info(f"Sending Web Push to endpoint: {sub.get('endpoint', '')[:45]}...")
             webpush(
                 subscription_info=sub,
                 data=payload,
                 vapid_private_key=_private_key,
                 vapid_claims=_vapid_claims,
-                ttl=300, # 5 minutes TTL
+                ttl=300,
             )
+            sent_count += 1
+            logger.info("Web Push dispatched successfully via FCM/Push service!")
         except WebPushException as ex:
             logger.warning(f"Web Push delivery error: {ex}")
-            # If endpoint is 404 or 410 Gone, mark for cleanup
             if hasattr(ex, "response") and ex.response is not None:
                 if ex.response.status_code in (404, 410):
                     expired_endpoints.append(sub.get("endpoint"))
         except Exception as e:
-            logger.debug(f"Push send error: {e}")
+            logger.warning(f"Push send unexpected error: {e}")
 
     # Clean up expired endpoints
     if expired_endpoints:
         for ep in expired_endpoints:
             remove_subscription(venue_id, ep)
+
+    return sent_count

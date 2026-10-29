@@ -122,10 +122,47 @@ async def lifespan(app: FastAPI):
     _setup_crossing_handler()
     logger.info("Database initialized, camera manager ready")
 
+    # Periodic background alert evaluator and server-side Web Push dispatcher
+    # Dispatches alerts straight into subscriber devices via Google FCM even if browser is closed
+    async def alert_background_worker():
+        while True:
+            try:
+                await asyncio.sleep(4)
+                db = SessionLocal()
+                try:
+                    from app.models.venue import Venue
+                    from app.services.alert_service import AlertService
+                    from app.services.push_service import broadcast_web_push
+
+                    venues = db.query(Venue).filter(Venue.is_active == True).all()
+                    for v in venues:
+                        alerts = AlertService.evaluate(db, v.id)
+                        if alerts:
+                            for a in alerts:
+                                sev = a.severity.value if hasattr(a.severity, "value") else str(a.severity)
+                                broadcast_web_push(
+                                    venue_id=v.id,
+                                    title=f"{'🚨 CRITICAL ALERT' if sev == 'CRITICAL' else '⚠️ RUSH WARNING'} • {v.name}",
+                                    body=a.message,
+                                    severity=sev,
+                                    tag=f"crowd-alert-{sev.lower()}",
+                                )
+                except Exception as e_loop:
+                    logger.debug(f"Alert loop debug: {e_loop}")
+                finally:
+                    db.close()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
+
+    alert_task = asyncio.create_task(alert_background_worker())
+
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    alert_task.cancel()
     camera_manager.stop_all()
     logger.info("All camera workers stopped")
 

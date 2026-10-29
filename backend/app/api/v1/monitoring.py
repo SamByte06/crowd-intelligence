@@ -194,6 +194,7 @@ class PushSubscriptionPayload(BaseModel):
 
 class PushTestPayload(BaseModel):
     venue_id: str
+    delay_seconds: int = 0
 
 
 @router.get("/push/vapid-public-key")
@@ -212,17 +213,33 @@ def subscribe_push(payload: PushSubscriptionPayload):
 
 
 @router.post("/push/test")
-def test_push(payload: PushTestPayload, db: Session = Depends(get_db)):
-    """Trigger an immediate real native Web Push directly through Google FCM/WNS."""
-    from app.services.push_service import broadcast_web_push
+async def test_push(payload: PushTestPayload, db: Session = Depends(get_db)):
+    """Trigger an immediate or delayed real native Web Push directly through Google FCM/WNS."""
     venue = db.query(Venue).filter(Venue.id == payload.venue_id).first()
     venue_name = venue.name if venue else "Monitored Event"
-    broadcast_web_push(
+
+    if payload.delay_seconds > 0:
+        import asyncio
+        async def send_delayed():
+            await asyncio.sleep(payload.delay_seconds)
+            from app.services.push_service import broadcast_web_push
+            broadcast_web_push(
+                venue_id=payload.venue_id,
+                title=f"🚨 Live Background Rush Alert • {venue_name}",
+                body="⚡ Push confirmed in background! This alert arrived while you were using Instagram or with your screen locked.",
+                severity="WARNING",
+                tag="test-delayed-push",
+            )
+        asyncio.create_task(send_delayed())
+        return {"status": "scheduled", "delay": payload.delay_seconds}
+
+    from app.services.push_service import broadcast_web_push
+    sent_count = broadcast_web_push(
         venue_id=payload.venue_id,
-        title=f"🔔 Native Phone Push Alert • {venue_name}",
-        body="Real background Web Push is active! You will receive this alert even if you are on Instagram or your phone is locked.",
+        title=f"🔔 Live Phone Push Alert • {venue_name}",
+        body="⚡ Instant Background Alert: You are actively connected! This alert arrives even when browsing Instagram, WhatsApp, or when your phone is locked.",
         severity="WARNING",
         tag="test-push",
     )
-    return {"status": "dispatched"}
+    return {"status": "dispatched", "subscribers_reached": sent_count}
 

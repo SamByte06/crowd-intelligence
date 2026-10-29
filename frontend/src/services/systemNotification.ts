@@ -43,18 +43,24 @@ export async function subscribeToBackendWebPush(venueId: string): Promise<boolea
     const { publicKey } = await keyRes.json()
     if (!publicKey) return false
 
-    // Subscribe via browser PushManager
+    // Subscribe via browser PushManager with active VAPID key
     const appKey = urlB64ToUint8Array(publicKey)
     let sub = await reg.pushManager.getSubscription()
-    if (!sub) {
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: appKey as unknown as BufferSource,
-      })
+    if (sub) {
+      try {
+        await sub.unsubscribe()
+      } catch (e) {
+        console.debug('Subscription cleanup note:', e)
+      }
     }
 
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: appKey as unknown as BufferSource,
+    })
+
     // Register subscription with backend
-    await fetch('/api/v1/push/subscribe', {
+    const regRes = await fetch('/api/v1/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -63,22 +69,23 @@ export async function subscribeToBackendWebPush(venueId: string): Promise<boolea
       }),
     })
 
-    return true
+    return regRes.ok
   } catch (err) {
-    console.debug('Backend Web Push subscription error:', err)
+    console.warn('Backend Web Push subscription note:', err)
     return false
   }
 }
 
 /**
  * Triggers a real server-side push test to verify delivery to mobile notification tray.
+ * If delaySeconds > 0, the server waits that long before dispatching, allowing user to switch to Instagram!
  */
-export async function triggerBackendTestPush(venueId: string): Promise<boolean> {
+export async function triggerBackendTestPush(venueId: string, delaySeconds: number = 0): Promise<boolean> {
   try {
     const res = await fetch('/api/v1/push/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ venue_id: venueId }),
+      body: JSON.stringify({ venue_id: venueId, delay_seconds: delaySeconds }),
     })
     return res.ok
   } catch (e) {

@@ -84,15 +84,21 @@ export default function EventFollowPage() {
   const [testSent, setTestSent] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [copiedLink, setCopiedLink] = useState(false)
+  const [bgCountdown, setBgCountdown] = useState<number | null>(null)
   const [lastNotificationAlert, setLastNotificationAlert] = useState<string>('')
 
   const lastStateRef = useRef<string>('')
 
-  // 1. Initial Load & Service Worker Registration
+  // 1. Initial Load & Service Worker Registration + Web Push Auto-Sync
   useEffect(() => {
-    registerServiceWorker()
-    setSystemPermission(getSystemNotificationPermission())
-  }, [])
+    registerServiceWorker().then(() => {
+      const perm = getSystemNotificationPermission()
+      setSystemPermission(perm)
+      if (isFollowing && venueId && perm === 'granted') {
+        subscribeToBackendWebPush(venueId)
+      }
+    })
+  }, [venueId, isFollowing])
 
   const fetchData = async () => {
     if (!venueId) return
@@ -300,7 +306,7 @@ export default function EventFollowPage() {
     }
   }
 
-  // 5. Test Notification Trigger
+  // 5. Test Notification Triggers
   const handleSendTestNotification = async () => {
     let granted = systemPermission === 'granted'
     if (!granted) {
@@ -311,11 +317,35 @@ export default function EventFollowPage() {
       // Trigger both client-side and server-side push test
       await Promise.all([
         sendTestNotification(venue?.name || 'Current Venue'),
-        triggerBackendTestPush(venueId),
+        triggerBackendTestPush(venueId, 0),
       ])
       if (soundEnabled) playAlertChime('info')
       setTestSent(true)
       setTimeout(() => setTestSent(false), 3500)
+    }
+  }
+
+  // 5B. Background Test Trigger with 5-Second Delay
+  // Gives the user 5 seconds to switch to Instagram or lock their screen, then server pushes to FCM!
+  const handleDelayedBgTest = async () => {
+    let granted = systemPermission === 'granted'
+    if (!granted) {
+      granted = await requestSystemNotificationPermission()
+      setSystemPermission(getSystemNotificationPermission())
+    }
+    if (granted && venueId) {
+      await subscribeToBackendWebPush(venueId)
+      await triggerBackendTestPush(venueId, 5)
+      setBgCountdown(5)
+      const timer = setInterval(() => {
+        setBgCountdown((prev) => {
+          if (prev === null || prev <= 1) {
+            clearInterval(timer)
+            return null
+          }
+          return prev - 1
+        })
+      }, 1000)
     }
   }
 
@@ -549,7 +579,7 @@ export default function EventFollowPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
             {systemPermission !== 'granted' ? (
               <button
                 type="button"
@@ -559,15 +589,37 @@ export default function EventFollowPage() {
                 Enable System Alerts
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={handleSendTestNotification}
-                disabled={testSent}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-all"
-              >
-                {testSent ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Bell className="w-3.5 h-3.5 text-blue-600" />}
-                <span>{testSent ? 'Alert Sent to OS!' : 'Send Test Notification'}</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={handleSendTestNotification}
+                  disabled={testSent}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-all"
+                  title="Test notification immediately"
+                >
+                  {testSent ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Bell className="w-3.5 h-3.5 text-blue-600" />}
+                  <span>{testSent ? 'Sent to OS!' : 'Instant Test'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDelayedBgTest}
+                  disabled={bgCountdown !== null}
+                  className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs ${
+                    bgCountdown !== null
+                      ? 'bg-amber-500 text-white animate-pulse'
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
+                  title="Fires push in 5s so you can switch to Instagram to test background delivery"
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>
+                    {bgCountdown !== null
+                      ? `Switch to Instagram! (${bgCountdown}s)`
+                      : '📲 Test in Background (Switch to Instagram in 5s)'}
+                  </span>
+                </button>
+              </>
             )}
           </div>
         </div>
