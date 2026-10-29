@@ -60,6 +60,27 @@ def _setup_crossing_handler():
                 trigger_venue_update(venue_id)
             except Exception:
                 pass
+
+            # Evaluate threshold escalation and broadcast native Web Push to background devices
+            try:
+                from app.services.alert_service import AlertService
+                new_alerts = AlertService.evaluate(db, venue_id)
+                if new_alerts:
+                    from app.services.push_service import broadcast_web_push
+                    from app.models.venue import Venue
+                    venue = db.query(Venue).filter(Venue.id == venue_id).first()
+                    v_name = venue.name if venue else "Monitored Event"
+                    for a in new_alerts:
+                        sev = a.severity.value if hasattr(a.severity, "value") else str(a.severity)
+                        broadcast_web_push(
+                            venue_id=venue_id,
+                            title=f"{'🚨 CRITICAL ALERT' if sev == 'CRITICAL' else '⚠️ RUSH WARNING'} • {v_name}",
+                            body=a.message,
+                            severity=sev,
+                            tag=f"crowd-alert-{sev.lower()}",
+                        )
+            except Exception as e_push:
+                logger.debug(f"Push evaluation error: {e_push}")
         except Exception as e:
             logger.error(f"Failed to record crossing: {e}")
         finally:

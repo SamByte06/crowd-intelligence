@@ -11,7 +11,31 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-// Click on notification brings user directly back to the active event page
+// 1. Native Web Push Event: Receives real push from Google FCM / Backend
+// Delivers notification straight to phone even if browser is closed / in Instagram!
+self.addEventListener('push', (event) => {
+  let data = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (e) {
+      data = { title: 'Crowd Intelligence Alert', options: { body: event.data.text() } };
+    }
+  }
+
+  const title = data.title || '🚨 Live Crowd Alert';
+  const options = {
+    icon: '/favicon.svg',
+    badge: '/favicon.svg',
+    vibrate: [400, 150, 400, 150, 400],
+    requireInteraction: true,
+    ...data.options,
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// 2. Click on notification brings user directly back to the active event page
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const urlToOpen = event.notification.data?.url || '/';
@@ -36,13 +60,13 @@ self.addEventListener('notificationclick', (event) => {
 const monitoredVenues = new Map();
 let swPollIntervalId = null;
 
-// Handle commands from frontend tabs
+// 3. Handle commands from frontend tabs
 self.addEventListener('message', (event) => {
   if (!event.data) return;
 
   const { type } = event.data;
 
-  // 1. Direct notification display request
+  // Direct notification display request
   if (type === 'SHOW_NOTIFICATION') {
     const { title, options } = event.data;
     const isSilentTimeline = options?.tag === 'live-crowd-timeline' || options?.renotify === false;
@@ -58,7 +82,7 @@ self.addEventListener('message', (event) => {
     });
   }
 
-  // 2. Start autonomous background monitoring for an event
+  // Start autonomous background monitoring for an event
   else if (type === 'START_BACKGROUND_MONITOR') {
     const { venueId, venueName } = event.data;
     if (venueId) {
@@ -72,12 +96,12 @@ self.addEventListener('message', (event) => {
 
       if (!swPollIntervalId) {
         checkAllMonitoredVenues();
-        swPollIntervalId = setInterval(checkAllMonitoredVenues, 4000);
+        swPollIntervalId = setInterval(checkAllMonitoredVenues, 3500);
       }
     }
   }
 
-  // 3. Stop monitoring
+  // Stop monitoring
   else if (type === 'STOP_BACKGROUND_MONITOR') {
     const { venueId } = event.data;
     if (venueId) {

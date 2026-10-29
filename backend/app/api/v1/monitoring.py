@@ -185,3 +185,44 @@ def get_dashboard(venue_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Venue not found")
     return state
 
+
+from pydantic import BaseModel
+
+class PushSubscriptionPayload(BaseModel):
+    venue_id: str
+    subscription: dict
+
+class PushTestPayload(BaseModel):
+    venue_id: str
+
+
+@router.get("/push/vapid-public-key")
+def get_push_public_key():
+    """Return the VAPID applicationServerKey for browser push subscription."""
+    from app.services.push_service import get_vapid_public_key
+    return {"publicKey": get_vapid_public_key()}
+
+
+@router.post("/push/subscribe")
+def subscribe_push(payload: PushSubscriptionPayload):
+    """Register browser push subscription for a venue."""
+    from app.services.push_service import add_subscription
+    add_subscription(payload.venue_id, payload.subscription)
+    return {"status": "subscribed"}
+
+
+@router.post("/push/test")
+def test_push(payload: PushTestPayload, db: Session = Depends(get_db)):
+    """Trigger an immediate real native Web Push directly through Google FCM/WNS."""
+    from app.services.push_service import broadcast_web_push
+    venue = db.query(Venue).filter(Venue.id == payload.venue_id).first()
+    venue_name = venue.name if venue else "Monitored Event"
+    broadcast_web_push(
+        venue_id=payload.venue_id,
+        title=f"🔔 Native Phone Push Alert • {venue_name}",
+        body="Real background Web Push is active! You will receive this alert even if you are on Instagram or your phone is locked.",
+        severity="WARNING",
+        tag="test-push",
+    )
+    return {"status": "dispatched"}
+

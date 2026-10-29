@@ -9,3 +9,4 @@ numpy>=1.26.0
 ultralytics>=8.3.0
 websockets>=14.0
 yt-dlp>=2024.8.6
+pywebpush>=2.5.0

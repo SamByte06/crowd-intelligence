@@ -48,3 +48,4 @@ async function poll() {
     // Network hiccup - silently continue
   }
 }
+

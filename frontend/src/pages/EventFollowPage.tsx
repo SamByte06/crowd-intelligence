@@ -34,7 +34,9 @@ import {
   startBackgroundServiceWorkerMonitoring,
   stopBackgroundServiceWorkerMonitoring,
   startAudioKeepAlive,
-  stopAudioKeepAlive
+  stopAudioKeepAlive,
+  subscribeToBackendWebPush,
+  triggerBackendTestPush
 } from '../services/systemNotification'
 
 // Gentle synthesized audio chime using Web Audio API (Zero external mp3 needed)
@@ -274,6 +276,11 @@ export default function EventFollowPage() {
       const granted = await requestSystemNotificationPermission()
       setSystemPermission(getSystemNotificationPermission())
       if (granted && venue && occupancy) {
+        // Register device with server-side Web Push (Google FCM / WNS)
+        if (venueId) {
+          subscribeToBackendWebPush(venueId)
+        }
+
         const percent = occupancy.percentage || 0
         const currentCount = occupancy.current_occupancy || 0
         const cap = venue.effective_capacity || occupancy.effective_capacity || 1000
@@ -300,8 +307,12 @@ export default function EventFollowPage() {
       granted = await requestSystemNotificationPermission()
       setSystemPermission(getSystemNotificationPermission())
     }
-    if (granted) {
-      await sendTestNotification(venue?.name || 'Current Venue')
+    if (granted && venueId) {
+      // Trigger both client-side and server-side push test
+      await Promise.all([
+        sendTestNotification(venue?.name || 'Current Venue'),
+        triggerBackendTestPush(venueId),
+      ])
       if (soundEnabled) playAlertChime('info')
       setTestSent(true)
       setTimeout(() => setTestSent(false), 3500)

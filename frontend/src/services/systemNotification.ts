@@ -8,6 +8,84 @@
 
 let keepAliveAudioCtx: AudioContext | null = null
 let keepAliveOsc: OscillatorNode | null = null
+let keepAliveAudioElement: HTMLAudioElement | null = null
+
+// Standard 44-byte silent WAV data URI
+const SILENT_WAV_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
+
+function urlB64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = window.atob(base64)
+  const outputArray = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i)
+  }
+  return outputArray
+}
+
+/**
+ * Subscribes the device to server-side Web Push (VAPID / Google FCM).
+ * Pushes alerts from the server directly to the phone even if Chrome is closed or inside Instagram!
+ */
+export async function subscribeToBackendWebPush(venueId: string): Promise<boolean> {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return false
+  }
+
+  try {
+    const reg = await registerServiceWorker()
+    if (!reg) return false
+
+    // Fetch VAPID public key from backend
+    const keyRes = await fetch('/api/v1/push/vapid-public-key')
+    if (!keyRes.ok) return false
+    const { publicKey } = await keyRes.json()
+    if (!publicKey) return false
+
+    // Subscribe via browser PushManager
+    const appKey = urlB64ToUint8Array(publicKey)
+    let sub = await reg.pushManager.getSubscription()
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: appKey as unknown as BufferSource,
+      })
+    }
+
+    // Register subscription with backend
+    await fetch('/api/v1/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        venue_id: venueId,
+        subscription: sub.toJSON(),
+      }),
+    })
+
+    return true
+  } catch (err) {
+    console.debug('Backend Web Push subscription error:', err)
+    return false
+  }
+}
+
+/**
+ * Triggers a real server-side push test to verify delivery to mobile notification tray.
+ */
+export async function triggerBackendTestPush(venueId: string): Promise<boolean> {
+  try {
+    const res = await fetch('/api/v1/push/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ venue_id: venueId }),
+    })
+    return res.ok
+  } catch (e) {
+    console.debug('Trigger test push error:', e)
+    return false
+  }
+}
 
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
@@ -144,25 +222,47 @@ export async function stopBackgroundServiceWorkerMonitoring(venueId: string): Pr
 }
 
 /**
- * Starts an inaudible, silent AudioContext oscillator node.
+ * Starts an inaudible, silent HTML5 Audio loop and MediaSession registration.
  * This instructs the OS / mobile browser NOT to suspend or kill the background tab
  * when the user switches to Instagram, WhatsApp, or locks the phone.
  */
-export function startAudioKeepAlive(): void {
+export function startAudioKeepAlive(venueName: string = 'Crowd Intelligence'): void {
   try {
-    if (keepAliveAudioCtx) return
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
-    if (!AudioContextClass) return
+    // 1. HTML5 Audio Element Loop (Primary Android Background Keep-Alive)
+    if (!keepAliveAudioElement) {
+      keepAliveAudioElement = new Audio(SILENT_WAV_URI)
+      keepAliveAudioElement.loop = true
+      keepAliveAudioElement.volume = 0.01 // Minimal non-zero volume allows MediaSession on Android
+      keepAliveAudioElement.play().catch(() => {
+        // User gesture may be required on some strict browsers
+      })
+    }
 
-    keepAliveAudioCtx = new AudioContextClass()
-    const gainNode = keepAliveAudioCtx.createGain()
-    gainNode.gain.setValueAtTime(0.00001, keepAliveAudioCtx.currentTime) // Inaudible zero volume
+    // 2. MediaSession Registration (tells Android OS this is an active foreground task)
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: 'Crowd Intelligence Live Monitoring',
+        artist: venueName,
+        album: 'Active Background Guard',
+      })
+      navigator.mediaSession.playbackState = 'playing'
+    }
 
-    keepAliveOsc = keepAliveAudioCtx.createOscillator()
-    keepAliveOsc.frequency.setValueAtTime(1, keepAliveAudioCtx.currentTime)
-    keepAliveOsc.connect(gainNode)
-    gainNode.connect(keepAliveAudioCtx.destination)
-    keepAliveOsc.start()
+    // 3. AudioContext Oscillator (Desktop fallback)
+    if (!keepAliveAudioCtx) {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+      if (AudioContextClass) {
+        keepAliveAudioCtx = new AudioContextClass()
+        const gainNode = keepAliveAudioCtx.createGain()
+        gainNode.gain.setValueAtTime(0.00001, keepAliveAudioCtx.currentTime)
+
+        keepAliveOsc = keepAliveAudioCtx.createOscillator()
+        keepAliveOsc.frequency.setValueAtTime(1, keepAliveAudioCtx.currentTime)
+        keepAliveOsc.connect(gainNode)
+        gainNode.connect(keepAliveAudioCtx.destination)
+        keepAliveOsc.start()
+      }
+    }
   } catch (e) {
     console.debug('Audio keep-alive initialization note:', e)
   }
@@ -170,6 +270,14 @@ export function startAudioKeepAlive(): void {
 
 export function stopAudioKeepAlive(): void {
   try {
+    if (keepAliveAudioElement) {
+      keepAliveAudioElement.pause()
+      keepAliveAudioElement.src = ''
+      keepAliveAudioElement = null
+    }
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'none'
+    }
     if (keepAliveOsc) {
       keepAliveOsc.stop()
       keepAliveOsc.disconnect()
