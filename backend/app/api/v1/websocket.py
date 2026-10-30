@@ -33,34 +33,53 @@ main_loop: Optional[asyncio.AbstractEventLoop] = None
 @router.websocket("/ws/dashboard/{venue_id}")
 async def dashboard_ws(websocket: WebSocket, venue_id: str):
     """
-    WebSocket endpoint for live dashboard updates.
-
-    Sends periodic state updates to connected clients.
-    On connect, sends the full initial state.
+    WebSocket endpoint for live dashboard & attendee updates.
+    Features:
+    - Initial state push on connect
+    - Continuous event-driven & periodic broadcasts
+    - Bidirectional heartbeat ping/pong to prevent Cloudflare Tunnel timeouts
+    - Graceful cleanup of suspended mobile browser connections
     """
     await websocket.accept()
     active_connections.add(websocket)
     connected_venues[websocket] = venue_id
     logger.info(f"WebSocket connected for venue {venue_id}")
 
-    try:
+    async def send_loop():
         # Send initial state
         state = _get_venue_state(venue_id)
         if state:
             await websocket.send_json({"type": "initial_state", "data": state})
 
-        # Periodic updates fallback
         while True:
             await asyncio.sleep(settings.WS_BROADCAST_INTERVAL)
-            state = _get_venue_state(venue_id)
-            if state:
-                await websocket.send_json({"type": "update", "data": state})
+            cur_state = _get_venue_state(venue_id)
+            if cur_state:
+                await websocket.send_json({"type": "update", "data": cur_state})
 
+    async def receive_loop():
+        while True:
+            msg_text = await websocket.receive_text()
+            if "ping" in msg_text.lower():
+                await websocket.send_text(json.dumps({"type": "pong", "time": time.time()}))
+
+    send_task = asyncio.create_task(send_loop())
+    recv_task = asyncio.create_task(receive_loop())
+
+    try:
+        done, pending = await asyncio.wait(
+            [send_task, recv_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for venue {venue_id}")
+        logger.info(f"WebSocket disconnected gracefully for venue {venue_id}")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.debug(f"WebSocket closed: {e}")
     finally:
+        send_task.cancel()
+        recv_task.cancel()
         active_connections.discard(websocket)
         connected_venues.pop(websocket, None)
 

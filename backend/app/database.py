@@ -2,7 +2,7 @@
 Database engine, session, and base model setup using SQLAlchemy.
 """
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.config import settings
 
@@ -53,6 +53,22 @@ def get_db():
 
 
 def init_db():
-    """Create all tables. Called on application startup."""
+    """Create all tables and auto-migrate missing columns on application startup."""
     import app.models  # noqa: F401 — ensure models are imported before create_all
     Base.metadata.create_all(bind=engine)
+
+    # Safe dynamic column migration for SQLite
+    try:
+        with engine.connect() as conn:
+            # Check venues columns
+            result = conn.execute(text("PRAGMA table_info(venues)"))
+            cols = [r[1] for r in result.fetchall()]
+            if "moderate_threshold" not in cols:
+                conn.execute(text("ALTER TABLE venues ADD COLUMN moderate_threshold REAL DEFAULT 0.60"))
+            if "notification_campaign_active" not in cols:
+                conn.execute(text("ALTER TABLE venues ADD COLUMN notification_campaign_active INTEGER DEFAULT 1"))
+            if "reminder_interval_seconds" not in cols:
+                conn.execute(text("ALTER TABLE venues ADD COLUMN reminder_interval_seconds INTEGER DEFAULT 60"))
+            conn.commit()
+    except Exception as e:
+        pass

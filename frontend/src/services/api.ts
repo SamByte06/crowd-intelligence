@@ -39,6 +39,8 @@ export const venueApi = {
   startProcess: (venueId: string) => request<any>(`/venues/${venueId}/start-process`, { method: 'POST' }),
   pauseProcess: (venueId: string) => request<any>(`/venues/${venueId}/pause-process`, { method: 'POST' }),
   resetProcess: (venueId: string) => request<any>(`/venues/${venueId}/reset-process`, { method: 'POST' }),
+  updateCampaign: (venueId: string, data: { notification_campaign_active?: boolean; reminder_interval_seconds?: number; moderate_threshold?: number; warning_threshold?: number; critical_threshold?: number }) =>
+    request<any>(`/venues/${venueId}/campaign`, { method: 'POST', body: JSON.stringify(data) }),
 };
 
 // --- Gates ---
@@ -125,36 +127,122 @@ export const monitorApi = {
   snapshots: (venueId: string, minutes = 60) => request<any[]>(`/venues/${venueId}/snapshots?minutes=${minutes}`),
   cameraHealth: () => request<any[]>('/cameras/health'),
   health: () => request<any>('/health'),
+  pushStats: (venueId: string) => request<any>(`/push/stats/${venueId}`),
+  pushHistory: (venueId: string, limit = 30) => request<any[]>(`/push/history/${venueId}?limit=${limit}`),
+  togglePush: (data: { venue_id: string; endpoint: string; notifications_enabled?: boolean; is_following?: boolean }) =>
+    request<any>('/push/toggle', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-// --- WebSocket ---
-export function connectWebSocket(venueId: string, onMessage: (data: any) => void): () => void {
+// --- Resilient WebSocket with Heartbeat, Backoff, and Background Auto-Recovery ---
+export type ConnectionStatus = 'CONNECTED' | 'RECONNECTING' | 'OFFLINE';
+
+export function connectWebSocket(
+  venueId: string,
+  onMessage: (data: any) => void,
+  onStatusChange?: (status: ConnectionStatus) => void
+): () => void {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/dashboard/${venueId}`;
   let active = true;
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let retryCount = 0;
+
+  const setStatus = (s: ConnectionStatus) => {
+    if (onStatusChange) onStatusChange(s);
+  };
+
+  const clearTimers = () => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    reconnectTimer = undefined;
+    heartbeatTimer = undefined;
+  };
 
   const connect = () => {
     if (!active) return;
-    socket = new WebSocket(wsUrl);
-    socket.onmessage = (event) => {
-      try {
-        onMessage(JSON.parse(event.data));
-      } catch (e) {
-        console.error('WebSocket message error:', e);
+    clearTimers();
+    setStatus(retryCount === 0 ? 'RECONNECTING' : 'RECONNECTING');
+
+    try {
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        if (!active) return;
+        retryCount = 0;
+        setStatus('CONNECTED');
+
+        // Start bidirectional heartbeat ping every 20 seconds to prevent Cloudflare Tunnel timeouts
+        heartbeatTimer = setInterval(() => {
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'ping', time: Date.now() }));
+          }
+        }, 20000);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          if (parsed.type === 'pong') return; // Heartbeat reply
+          onMessage(parsed);
+        } catch (e) {
+          console.debug('WebSocket parse note:', e);
+        }
+      };
+
+      socket.onclose = () => {
+        if (!active) return;
+        clearTimers();
+        setStatus('RECONNECTING');
+        // Exponential backoff: 1s, 2s, 4s, 8s, up to 12s max
+        const delay = Math.min(12000, 1000 * Math.pow(1.5, retryCount));
+        retryCount++;
+        reconnectTimer = setTimeout(connect, delay);
+      };
+
+      socket.onerror = () => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
+      };
+    } catch (err) {
+      if (active) {
+        setStatus('OFFLINE');
+        reconnectTimer = setTimeout(connect, 3000);
       }
-    };
-    socket.onclose = () => {
-      if (active) reconnectTimer = setTimeout(connect, 3000);
-    };
-    socket.onerror = () => socket?.close();
+    }
   };
 
+  // Immediate recovery when mobile user switches back from Instagram or unlocks screen
+  const handleVisibilityChange = () => {
+    if (!active) return;
+    if (document.visibilityState === 'visible') {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        retryCount = 0;
+        connect();
+      }
+    }
+  };
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('focus', handleVisibilityChange);
+
   connect();
+
   return () => {
     active = false;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    socket?.close();
+    clearTimers();
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.removeEventListener('focus', handleVisibilityChange);
+    if (socket) {
+      socket.onopen = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.onmessage = null;
+      socket.close();
+      socket = null;
+    }
+    setStatus('OFFLINE');
   };
 }

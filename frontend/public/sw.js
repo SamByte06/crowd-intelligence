@@ -63,6 +63,23 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
+// 2B. Handle Push Subscription Change / Expiry (automatic re-registration)
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    self.registration.pushManager.subscribe(event.oldSubscription ? event.oldSubscription.options : { userVisibleOnly: true })
+      .then((subscription) => {
+        return fetch('/api/v1/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            venue_id: 'auto-renew',
+            subscription: subscription.toJSON(),
+          }),
+        });
+      }).catch((e) => console.debug('Subscription auto-renew note:', e))
+  );
+});
+
 // Track monitored venues for autonomous background monitoring in service worker
 const monitoredVenues = new Map();
 let swPollIntervalId = null;

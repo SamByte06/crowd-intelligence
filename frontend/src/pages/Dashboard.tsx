@@ -4,6 +4,7 @@ import {
   Activity,
   AlertCircle,
   ArrowRight,
+  Bell,
   Calendar,
   CheckCircle2,
   Clock,
@@ -14,12 +15,15 @@ import {
   Minimize2,
   Pause,
   Play,
+  Radio,
   RefreshCw,
   RotateCcw,
+  Send,
   Settings,
   ShieldAlert,
   ShieldCheck,
   Sliders,
+  Smartphone,
   Trash2,
   Users,
   VideoOff,
@@ -47,8 +51,82 @@ export default function Dashboard() {
   const [fullscreenGate, setFullscreenGate] = useState<Gate | null>(null)
   const [gridMode, setGridMode] = useState<'large' | 'compact'>('large')
 
+  // Notification Campaign & Attendee Push Metrics
+  const [pushStats, setPushStats] = useState<any>(null)
+  const [pushHistory, setPushHistory] = useState<any[]>([])
+  const [updatingCampaign, setUpdatingCampaign] = useState(false)
+  const [testPushSent, setTestPushSent] = useState(false)
+
   // High-performance multiplexed video streams over a single WebSocket connection
   const liveFrames = useVideoStreams(venueId)
+
+  const fetchPushData = useCallback(async () => {
+    if (!venueId) return
+    try {
+      const [stats, history] = await Promise.all([
+        monitorApi.pushStats(venueId),
+        monitorApi.pushHistory(venueId, 15),
+      ])
+      setPushStats(stats)
+      setPushHistory(history)
+    } catch (e) {
+      console.debug('Failed to fetch push stats:', e)
+    }
+  }, [venueId])
+
+  useEffect(() => {
+    fetchPushData()
+    const intv = setInterval(fetchPushData, 8000)
+    return () => clearInterval(intv)
+  }, [fetchPushData])
+
+  const handleToggleCampaign = async (nextActive: boolean) => {
+    if (!venueId) return
+    setUpdatingCampaign(true)
+    try {
+      const res = await venueApi.updateCampaign(venueId, {
+        notification_campaign_active: nextActive,
+      })
+      setPushStats((prev: any) => ({ ...prev, notification_campaign_active: res.notification_campaign_active }))
+    } catch (e) {
+      console.error('Failed to toggle campaign:', e)
+    } finally {
+      setUpdatingCampaign(false)
+    }
+  }
+
+  const handleUpdateReminderInterval = async (intervalSecs: number) => {
+    if (!venueId) return
+    setUpdatingCampaign(true)
+    try {
+      const res = await venueApi.updateCampaign(venueId, {
+        reminder_interval_seconds: intervalSecs,
+      })
+      setPushStats((prev: any) => ({ ...prev, reminder_interval_seconds: res.reminder_interval_seconds }))
+    } catch (e) {
+      console.error('Failed to update interval:', e)
+    } finally {
+      setUpdatingCampaign(false)
+    }
+  }
+
+  const handleTriggerAdminTestPush = async () => {
+    if (!venueId) return
+    setTestPushSent(true)
+    try {
+      await fetch('/api/v1/push/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venue_id: venueId, delay_seconds: 0 }),
+      })
+      setTimeout(() => {
+        fetchPushData()
+        setTestPushSent(false)
+      }, 2500)
+    } catch (e) {
+      setTestPushSent(false)
+    }
+  }
 
   // Keep fullscreenGate synchronized with latest live data
   useEffect(() => {
@@ -753,6 +831,165 @@ export default function Dashboard() {
           ))}
         </section>
       )}
+
+      {/* Public Followers & Background Push Notification Management */}
+      <section aria-label="Notification campaign controls" className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+              <Bell className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Mobile Public Followers &amp; Push Notification Engine</h2>
+              <p className="text-xs text-slate-500">
+                Autonomous server-side Web Push dispatches crowd alerts to followers even when phones are locked or on Instagram.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleTriggerAdminTestPush}
+              disabled={testPushSent}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>{testPushSent ? 'Push Dispatched!' : 'Broadcast Test Alert'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Campaign Metrics & Configuration Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Followers count */}
+          <div className="rounded-lg border border-slate-100 bg-slate-50/70 p-3.5">
+            <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+              <span>Active Followers</span>
+              <Smartphone className="w-3.5 h-3.5 text-blue-500" />
+            </div>
+            <p className="text-2xl font-bold text-slate-900">{pushStats?.total_followers ?? 0}</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Mobile devices following this event</p>
+          </div>
+
+          {/* Enabled notifications */}
+          <div className="rounded-lg border border-slate-100 bg-slate-50/70 p-3.5">
+            <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+              <span>Push Notifications Active</span>
+              <Bell className="w-3.5 h-3.5 text-emerald-500" />
+            </div>
+            <p className="text-2xl font-bold text-emerald-600">{pushStats?.notifications_enabled_count ?? 0}</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Subscribed to live OS notification tray</p>
+          </div>
+
+          {/* Campaign status toggle */}
+          <div className="rounded-lg border border-slate-100 bg-slate-50/70 p-3.5 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+              <span>Campaign Status</span>
+              <Radio className="w-3.5 h-3.5 text-slate-400" />
+            </div>
+            <div className="flex items-center justify-between gap-2 mt-1">
+              <span className={`text-xs font-bold ${pushStats?.notification_campaign_active !== false ? 'text-emerald-700' : 'text-slate-500'}`}>
+                {pushStats?.notification_campaign_active !== false ? 'RUNNING' : 'PAUSED'}
+              </span>
+              <button
+                type="button"
+                disabled={updatingCampaign}
+                onClick={() => handleToggleCampaign(pushStats?.notification_campaign_active === false)}
+                className={`px-2.5 py-1 text-xs rounded-md font-semibold transition ${
+                  pushStats?.notification_campaign_active !== false
+                    ? 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                    : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                }`}
+              >
+                {pushStats?.notification_campaign_active !== false ? 'Pause Alerts' : 'Start Alerts'}
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">Admin control over push broadcasts</p>
+          </div>
+
+          {/* Reminder Interval */}
+          <div className="rounded-lg border border-slate-100 bg-slate-50/70 p-3.5 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+              <span>Reminder Frequency</span>
+              <Clock className="w-3.5 h-3.5 text-slate-400" />
+            </div>
+            <div className="mt-1">
+              <select
+                disabled={updatingCampaign}
+                value={pushStats?.reminder_interval_seconds ?? 60}
+                onChange={(e) => handleUpdateReminderInterval(Number(e.target.value))}
+                className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-md py-1 px-2 text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+              >
+                <option value={30}>Every 30 seconds</option>
+                <option value={60}>Every 1 minute (Default)</option>
+                <option value={120}>Every 2 minutes</option>
+                <option value={300}>Every 5 minutes</option>
+              </select>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">Repeat alerts during sustained rush</p>
+          </div>
+        </div>
+
+        {/* Push Delivery Audit History Table */}
+        <div className="pt-2">
+          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Recent Push Delivery Audit Log</h3>
+          {pushHistory.length === 0 ? (
+            <p className="text-xs text-slate-400 italic">No push broadcasts recorded yet.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-slate-100">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-semibold">
+                  <tr>
+                    <th className="py-2 px-3">Time</th>
+                    <th className="py-2 px-3">Severity</th>
+                    <th className="py-2 px-3">Title &amp; Message</th>
+                    <th className="py-2 px-3">Sent / Reached</th>
+                    <th className="py-2 px-3">Failed / Pruned</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {pushHistory.slice(0, 8).map((h) => (
+                    <tr key={h.id} className="hover:bg-slate-50/50">
+                      <td className="py-2 px-3 whitespace-nowrap text-slate-500 font-mono text-[11px]">
+                        {h.triggered_at ? new Date(h.triggered_at).toLocaleTimeString() : 'Just now'}
+                      </td>
+                      <td className="py-2 px-3 whitespace-nowrap">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded-full font-bold text-[10px] border ${
+                            h.severity === 'CRITICAL'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : h.severity === 'HIGH' || h.severity === 'WARNING'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : h.severity === 'MODERATE'
+                              ? 'bg-orange-50 text-orange-700 border-orange-200'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }`}
+                        >
+                          {h.severity}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 max-w-md truncate" title={h.body}>
+                        <strong>{h.title}</strong> — <span className="text-slate-500">{h.body}</span>
+                      </td>
+                      <td className="py-2 px-3 whitespace-nowrap">
+                        <span className="font-semibold text-emerald-600">{h.successful_deliveries}</span> / {h.subscribers_count}
+                      </td>
+                      <td className="py-2 px-3 whitespace-nowrap">
+                        {h.failed_deliveries > 0 ? (
+                          <span className="text-amber-600 font-medium">{h.failed_deliveries} cleaned</span>
+                        ) : (
+                          <span className="text-slate-400">0</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   )
 }

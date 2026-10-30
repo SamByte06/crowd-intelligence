@@ -6,6 +6,7 @@ from app.models.counting_event import CountingEvent
 from app.models.occupancy import OccupancyBaseline, OccupancySnapshot
 from app.models.alert import Alert
 from app.models.audit_log import AuditLog
+from app.models.push_subscription import PushSubscription, NotificationHistory
 
 __all__ = [
     "Venue",
@@ -15,4 +16,6 @@ __all__ = [
     "OccupancySnapshot",
     "Alert",
     "AuditLog",
+    "PushSubscription",
+    "NotificationHistory",
 ]

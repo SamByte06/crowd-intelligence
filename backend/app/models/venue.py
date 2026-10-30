@@ -21,8 +21,13 @@ class Venue(Base):
     usable_area_sqm = Column(Float, nullable=True)
     max_capacity = Column(Integer, nullable=True)  # Admin-provided; null = use estimate
     density_per_sqm = Column(Float, default=2.0)
-    warning_threshold = Column(Float, default=0.75)  # fraction of capacity
-    critical_threshold = Column(Float, default=0.90)
+    moderate_threshold = Column(Float, default=0.60)  # fraction of capacity (Moderate Crowd)
+    warning_threshold = Column(Float, default=0.75)   # fraction of capacity (High Rush)
+    critical_threshold = Column(Float, default=0.90)  # fraction of capacity (Critical Capacity)
+
+    # Notification Campaign & Background Reminder Settings
+    notification_campaign_active = Column(Boolean, default=True)
+    reminder_interval_seconds = Column(Integer, default=60)  # default 60s background reminder interval
 
     # Current state
     current_occupancy = Column(Integer, default=0)
@@ -48,6 +53,8 @@ class Venue(Base):
     occupancy_snapshots = relationship("OccupancySnapshot", back_populates="venue", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="venue", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="venue", cascade="all, delete-orphan")
+    push_subscriptions = relationship("PushSubscription", back_populates="venue", cascade="all, delete-orphan")
+    notification_history = relationship("NotificationHistory", back_populates="venue", cascade="all, delete-orphan")
 
     @property
     def effective_capacity(self) -> int | None:

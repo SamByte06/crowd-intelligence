@@ -186,11 +186,28 @@ def get_dashboard(venue_id: str, db: Session = Depends(get_db)):
     return state
 
 
+from typing import Optional
 from pydantic import BaseModel
 
 class PushSubscriptionPayload(BaseModel):
     venue_id: str
     subscription: dict
+    is_following: bool = True
+    notifications_enabled: bool = True
+    user_identifier: Optional[str] = None
+
+class PushTogglePayload(BaseModel):
+    venue_id: str
+    endpoint: str
+    notifications_enabled: Optional[bool] = None
+    is_following: Optional[bool] = None
+
+class CampaignSettingsPayload(BaseModel):
+    notification_campaign_active: Optional[bool] = None
+    reminder_interval_seconds: Optional[int] = None
+    moderate_threshold: Optional[float] = None
+    warning_threshold: Optional[float] = None
+    critical_threshold: Optional[float] = None
 
 class PushTestPayload(BaseModel):
     venue_id: str
@@ -208,7 +225,13 @@ def get_push_public_key():
 def subscribe_push(payload: PushSubscriptionPayload, db: Session = Depends(get_db)):
     """Register browser push subscription for a venue and send immediate confirmation timeline push."""
     from app.services.push_service import add_subscription, broadcast_web_push
-    add_subscription(payload.venue_id, payload.subscription)
+    add_subscription(
+        venue_id=payload.venue_id,
+        subscription_info=payload.subscription,
+        user_identifier=payload.user_identifier,
+        is_following=payload.is_following,
+        notifications_enabled=payload.notifications_enabled,
+    )
 
     # Immediately push current live timeline to newly subscribed device
     try:
@@ -217,8 +240,8 @@ def subscribe_push(payload: PushSubscriptionPayload, db: Session = Depends(get_d
             cap = venue.effective_capacity or 1000
             count = venue.current_occupancy or 0
             pct = round((count / cap) * 100, 1) if cap > 0 else 0
-            status_emoji = "🔴" if pct >= 90 else ("🟡" if pct >= 75 else "🟢")
-            status_word = "CRITICAL CAPACITY" if pct >= 90 else ("HIGH RUSH" if pct >= 75 else "SAFE FLOW")
+            status_emoji = "🔴" if pct >= 90 else ("🟡" if pct >= 75 else ("🟠" if pct >= 60 else "🟢"))
+            status_word = "CRITICAL CAPACITY" if pct >= 90 else ("HIGH RUSH" if pct >= 75 else ("MODERATE RUSH" if pct >= 60 else "SAFE FLOW"))
 
             broadcast_web_push(
                 venue_id=payload.venue_id,
@@ -231,6 +254,92 @@ def subscribe_push(payload: PushSubscriptionPayload, db: Session = Depends(get_d
         pass
 
     return {"status": "subscribed"}
+
+
+@router.post("/push/toggle")
+def toggle_push_preference(payload: PushTogglePayload):
+    """Update notification or follow preferences for an existing subscriber."""
+    from app.services.push_service import toggle_subscription_preference
+    toggle_subscription_preference(
+        venue_id=payload.venue_id,
+        endpoint=payload.endpoint,
+        notifications_enabled=payload.notifications_enabled,
+        is_following=payload.is_following,
+    )
+    return {"status": "updated"}
+
+
+@router.get("/push/stats/{venue_id}")
+def get_push_stats(venue_id: str, db: Session = Depends(get_db)):
+    """Get active followers count and notification settings for a venue."""
+    from app.services.push_service import get_subscribers_count
+    counts = get_subscribers_count(venue_id)
+    venue = db.query(Venue).filter(Venue.id == venue_id).first()
+    return {
+        "venue_id": venue_id,
+        **counts,
+        "notification_campaign_active": getattr(venue, "notification_campaign_active", True) if venue else True,
+        "reminder_interval_seconds": getattr(venue, "reminder_interval_seconds", 60) if venue else 60,
+        "moderate_threshold": getattr(venue, "moderate_threshold", 0.60) if venue else 0.60,
+        "warning_threshold": venue.warning_threshold if venue else 0.75,
+        "critical_threshold": venue.critical_threshold if venue else 0.90,
+    }
+
+
+@router.get("/push/history/{venue_id}")
+def get_notification_history(venue_id: str, limit: int = 30, db: Session = Depends(get_db)):
+    """Get recent notification delivery history for admin audit."""
+    from app.models.push_subscription import NotificationHistory
+    history = (
+        db.query(NotificationHistory)
+        .filter(NotificationHistory.venue_id == venue_id)
+        .order_by(NotificationHistory.triggered_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": h.id,
+            "title": h.title,
+            "body": h.body,
+            "severity": h.severity,
+            "tag": h.tag,
+            "subscribers_count": h.subscribers_count,
+            "successful_deliveries": h.successful_deliveries,
+            "failed_deliveries": h.failed_deliveries,
+            "triggered_at": h.triggered_at.isoformat() if h.triggered_at else None,
+        }
+        for h in history
+    ]
+
+
+@router.post("/venues/{venue_id}/campaign")
+def update_campaign_settings(venue_id: str, payload: CampaignSettingsPayload, db: Session = Depends(get_db)):
+    """Admin configuration: toggle alert campaign, set reminder interval and thresholds."""
+    venue = db.query(Venue).filter(Venue.id == venue_id).first()
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    if payload.notification_campaign_active is not None:
+        venue.notification_campaign_active = payload.notification_campaign_active
+    if payload.reminder_interval_seconds is not None:
+        venue.reminder_interval_seconds = max(15, min(3600, payload.reminder_interval_seconds))
+    if payload.moderate_threshold is not None:
+        venue.moderate_threshold = max(0.1, min(0.95, payload.moderate_threshold))
+    if payload.warning_threshold is not None:
+        venue.warning_threshold = max(0.1, min(0.99, payload.warning_threshold))
+    if payload.critical_threshold is not None:
+        venue.critical_threshold = max(0.1, min(1.5, payload.critical_threshold))
+
+    db.commit()
+    return {
+        "status": "updated",
+        "notification_campaign_active": venue.notification_campaign_active,
+        "reminder_interval_seconds": venue.reminder_interval_seconds,
+        "moderate_threshold": getattr(venue, "moderate_threshold", 0.60),
+        "warning_threshold": venue.warning_threshold,
+        "critical_threshold": venue.critical_threshold,
+    }
 
 
 @router.post("/push/test")

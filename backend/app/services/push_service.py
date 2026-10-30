@@ -1,7 +1,8 @@
 """
 Web Push Service — Dispatches real native push notifications to subscriber devices
-via VAPID and browser push services (FCM / Mozilla Push / WNS).
+via VAPID and browser push services (Google FCM / Mozilla Push / WNS).
 Guarantees notifications arrive on mobile devices even if browser is closed or in Instagram.
+Features database persistence, subscription state toggles, and notification delivery history.
 """
 
 import os
@@ -9,6 +10,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
+from datetime import datetime, timezone
 from py_vapid import Vapid
 from pywebpush import webpush, WebPushException
 
@@ -18,7 +20,7 @@ VAPID_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "vapid_key
 VAPID_PEM_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "vapid_private.pem"
 SUBSCRIPTIONS_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "push_subscriptions.json"
 
-# In-memory subscription registry: venue_id -> list of subscriptions
+# In-memory subscription registry: venue_id -> list of subscription dicts
 _subscriptions: Dict[str, List[dict]] = {}
 _vapid_claims: dict = {}
 _public_key: str = ""
@@ -76,7 +78,7 @@ def _ensure_vapid_keys():
 
 
 def _load_subscriptions():
-    """Load saved subscriptions from disk."""
+    """Load saved subscriptions from disk and database."""
     global _subscriptions
     if SUBSCRIPTIONS_FILE.exists():
         try:
@@ -107,36 +109,180 @@ def get_vapid_public_key() -> str:
     return _public_key
 
 
-def add_subscription(venue_id: str, subscription_info: dict):
-    """Register a browser push subscription for a venue."""
+def add_subscription(
+    venue_id: str,
+    subscription_info: dict,
+    user_identifier: Optional[str] = None,
+    is_following: bool = True,
+    notifications_enabled: bool = True,
+):
+    """
+    Register or update a browser push subscription for a venue.
+    Persists to both memory cache, JSON file, and the database.
+    """
     if venue_id not in _subscriptions:
         _subscriptions[venue_id] = []
 
     endpoint = subscription_info.get("endpoint")
-    # Avoid duplicate registrations
+    if not endpoint:
+        return
+
+    # Avoid duplicate in-memory registrations
     filtered = [s for s in _subscriptions[venue_id] if s.get("endpoint") != endpoint]
-    filtered.append(subscription_info)
+    sub_record = {
+        **subscription_info,
+        "is_following": is_following,
+        "notifications_enabled": notifications_enabled,
+        "user_identifier": user_identifier,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    filtered.append(sub_record)
     _subscriptions[venue_id] = filtered
     _save_subscriptions()
+
+    # Persist in Database
+    try:
+        from app.database import SessionLocal
+        from app.models.push_subscription import PushSubscription
+        db = SessionLocal()
+        try:
+            existing = db.query(PushSubscription).filter(
+                PushSubscription.venue_id == venue_id,
+                PushSubscription.endpoint == endpoint,
+            ).first()
+
+            keys = subscription_info.get("keys", {})
+            p256dh = keys.get("p256dh", "")
+            auth = keys.get("auth", "")
+
+            if existing:
+                existing.is_following = is_following
+                existing.notifications_enabled = notifications_enabled
+                if user_identifier:
+                    existing.user_identifier = user_identifier
+                if p256dh:
+                    existing.p256dh = p256dh
+                if auth:
+                    existing.auth = auth
+                existing.updated_at = datetime.now(timezone.utc)
+            else:
+                db_sub = PushSubscription(
+                    venue_id=venue_id,
+                    endpoint=endpoint,
+                    p256dh=p256dh,
+                    auth=auth,
+                    user_identifier=user_identifier,
+                    is_following=is_following,
+                    notifications_enabled=notifications_enabled,
+                )
+                db.add(db_sub)
+            db.commit()
+        except Exception as e_db:
+            db.rollback()
+            logger.debug(f"DB PushSubscription write note: {e_db}")
+        finally:
+            db.close()
+    except Exception as e_outer:
+        logger.debug(f"DB session error in add_subscription: {e_outer}")
+
     logger.info(f"Registered Web Push subscriber for venue {venue_id}. Total subscribers: {len(filtered)}")
 
 
+def toggle_subscription_preference(
+    venue_id: str,
+    endpoint: str,
+    notifications_enabled: Optional[bool] = None,
+    is_following: Optional[bool] = None,
+):
+    """Update notification preferences for a specific subscriber."""
+    if venue_id in _subscriptions:
+        for s in _subscriptions[venue_id]:
+            if s.get("endpoint") == endpoint:
+                if notifications_enabled is not None:
+                    s["notifications_enabled"] = notifications_enabled
+                if is_following is not None:
+                    s["is_following"] = is_following
+                s["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _save_subscriptions()
+
+    try:
+        from app.database import SessionLocal
+        from app.models.push_subscription import PushSubscription
+        db = SessionLocal()
+        try:
+            existing = db.query(PushSubscription).filter(
+                PushSubscription.venue_id == venue_id,
+                PushSubscription.endpoint == endpoint,
+            ).first()
+            if existing:
+                if notifications_enabled is not None:
+                    existing.notifications_enabled = notifications_enabled
+                if is_following is not None:
+                    existing.is_following = is_following
+                existing.updated_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception as e_db:
+            db.rollback()
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+
 def remove_subscription(venue_id: str, endpoint: str):
-    """Remove an expired or unsubscribed endpoint."""
+    """Remove an expired or unsubscribed endpoint from memory, disk, and database."""
     if venue_id in _subscriptions:
         _subscriptions[venue_id] = [s for s in _subscriptions[venue_id] if s.get("endpoint") != endpoint]
         _save_subscriptions()
 
+    try:
+        from app.database import SessionLocal
+        from app.models.push_subscription import PushSubscription
+        db = SessionLocal()
+        try:
+            db.query(PushSubscription).filter(
+                PushSubscription.venue_id == venue_id,
+                PushSubscription.endpoint == endpoint,
+            ).delete()
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+    except Exception:
+        pass
 
-def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WARNING", tag: str = "crowd-alert") -> int:
+
+def get_subscribers_count(venue_id: str) -> dict:
+    """Return count of active followers and enabled notification subscribers."""
+    subscribers = _subscriptions.get(venue_id, [])
+    followers = sum(1 for s in subscribers if s.get("is_following", True))
+    notifications_on = sum(1 for s in subscribers if s.get("is_following", True) and s.get("notifications_enabled", True))
+    return {
+        "total_followers": followers,
+        "notifications_enabled_count": notifications_on,
+    }
+
+
+def broadcast_web_push(
+    venue_id: str,
+    title: str,
+    body: str,
+    severity: str = "WARNING",
+    tag: str = "crowd-alert",
+) -> int:
     """
     Directly deliver native Web Push notification to all subscriber devices.
     Pushes via Google FCM / Mozilla Push Service straight into device OS notification bar.
+    Only sends to subscribers who have notifications_enabled = True.
+    Saves an audit log into NotificationHistory table.
     Returns the number of devices successfully messaged.
     """
-    subscribers = _subscriptions.get(venue_id, [])
+    raw_subscribers = _subscriptions.get(venue_id, [])
+    # Filter to users who have notifications turned ON and are following
+    subscribers = [s for s in raw_subscribers if s.get("notifications_enabled", True) and s.get("is_following", True)]
     if not subscribers:
-        logger.debug(f"broadcast_web_push: no subscribers for venue {venue_id}")
+        logger.debug(f"broadcast_web_push: no active subscribers for venue {venue_id}")
         return 0
 
     is_timeline = (tag == "live-crowd-timeline")
@@ -151,12 +297,17 @@ def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WA
             "renotify": not is_timeline,
             "silent": is_timeline,
             "vibrate": [] if is_timeline else ([400, 150, 400, 150, 400] if severity == "CRITICAL" else [300, 100, 300]),
-            "data": {"url": f"/events/{venue_id}"},
+            "data": {
+                "url": f"/events/{venue_id}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "severity": severity,
+            },
         }
     })
 
     expired_endpoints = []
     sent_count = 0
+    fail_count = 0
 
     for sub in subscribers:
         try:
@@ -172,15 +323,43 @@ def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WA
             logger.info("Web Push dispatched successfully via FCM/Push service!")
         except WebPushException as ex:
             logger.warning(f"Web Push delivery error: {ex}")
+            fail_count += 1
             if hasattr(ex, "response") and ex.response is not None:
                 if ex.response.status_code in (404, 410):
                     expired_endpoints.append(sub.get("endpoint"))
         except Exception as e:
             logger.warning(f"Push send unexpected error: {e}")
+            fail_count += 1
 
     # Clean up expired endpoints
     if expired_endpoints:
         for ep in expired_endpoints:
             remove_subscription(venue_id, ep)
+
+    # Save to NotificationHistory in DB
+    try:
+        from app.database import SessionLocal
+        from app.models.push_subscription import NotificationHistory
+        db = SessionLocal()
+        try:
+            hist = NotificationHistory(
+                venue_id=venue_id,
+                title=title,
+                body=body,
+                severity=severity,
+                tag=tag,
+                subscribers_count=len(subscribers),
+                successful_deliveries=sent_count,
+                failed_deliveries=fail_count,
+            )
+            db.add(hist)
+            db.commit()
+        except Exception as e_hist:
+            db.rollback()
+            logger.debug(f"Failed to record notification history: {e_hist}")
+        finally:
+            db.close()
+    except Exception:
+        pass
 
     return sent_count

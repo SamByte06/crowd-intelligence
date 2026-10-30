@@ -22,7 +22,7 @@ import {
   Laptop,
   CheckCircle2
 } from 'lucide-react'
-import { venueApi, gateApi, monitorApi, connectWebSocket } from '../services/api'
+import { venueApi, gateApi, monitorApi, connectWebSocket, ConnectionStatus } from '../services/api'
 import {
   registerServiceWorker,
   getSystemNotificationPermission,
@@ -36,6 +36,7 @@ import {
   startAudioKeepAlive,
   stopAudioKeepAlive,
   subscribeToBackendWebPush,
+  toggleBackendNotificationPreference,
   triggerBackendTestPush
 } from '../services/systemNotification'
 
@@ -80,6 +81,13 @@ export default function EventFollowPage() {
   const [isFollowing, setIsFollowing] = useState<boolean>(() => {
     return localStorage.getItem(`follow_${venueId}`) === 'true'
   })
+  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(() => {
+    return localStorage.getItem(`notif_enabled_${venueId}`) !== 'false'
+  })
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('RECONNECTING')
+  const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date())
+  const [lastNotificationTime, setLastNotificationTime] = useState<string | null>(null)
+
   const [systemPermission, setSystemPermission] = useState<NotificationPermission>('default')
   const [testSent, setTestSent] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
@@ -95,10 +103,10 @@ export default function EventFollowPage() {
       const perm = getSystemNotificationPermission()
       setSystemPermission(perm)
       if (isFollowing && venueId && perm === 'granted') {
-        subscribeToBackendWebPush(venueId)
+        subscribeToBackendWebPush(venueId, isFollowing, notificationsEnabled)
       }
     })
-  }, [venueId, isFollowing])
+  }, [venueId, isFollowing, notificationsEnabled])
 
   const fetchData = async () => {
     if (!venueId) return
@@ -117,6 +125,7 @@ export default function EventFollowPage() {
       setForecast(fcRes)
       setGates(gatesRes)
       setAlerts(alertsRes)
+      setLastSyncTime(new Date())
     } catch (err) {
       console.error('Failed to fetch event data:', err)
     } finally {
@@ -130,21 +139,49 @@ export default function EventFollowPage() {
     return () => clearInterval(interval)
   }, [venueId])
 
-  // 2. WebSocket Real-time Listener
+  // 2. Resilient WebSocket Listener with auto-reconnection and heartbeat
   useEffect(() => {
     if (!venueId) return
-    return connectWebSocket(venueId, (message) => {
-      if (message.type === 'state_update') {
-        if (message.occupancy) setOccupancy((prev: any) => ({ ...prev, ...message.occupancy }))
-        if (message.flow) setFlow((prev: any) => ({ ...prev, ...message.flow }))
-        if (message.forecast) setForecast((prev: any) => ({ ...prev, ...message.forecast }))
-      } else if (message.type === 'alert' && message.data) {
-        setAlerts((prev) => [message.data, ...prev.filter((a) => a.id !== message.data.id)])
+    return connectWebSocket(
+      venueId,
+      (message) => {
+        setLastSyncTime(new Date())
+        if (message.type === 'state_update') {
+          if (message.occupancy) setOccupancy((prev: any) => ({ ...prev, ...message.occupancy }))
+          if (message.flow) setFlow((prev: any) => ({ ...prev, ...message.flow }))
+          if (message.forecast) setForecast((prev: any) => ({ ...prev, ...message.forecast }))
+        } else if (message.type === 'update' && message.data) {
+          if (message.data.occupancy) setOccupancy((prev: any) => ({ ...prev, ...message.data.occupancy }))
+          if (message.data.flow) setFlow((prev: any) => ({ ...prev, ...message.data.flow }))
+          if (message.data.forecast) setForecast((prev: any) => ({ ...prev, ...message.data.forecast }))
+        } else if (message.type === 'alert' && message.data) {
+          setAlerts((prev) => [message.data, ...prev.filter((a) => a.id !== message.data.id)])
+          setLastNotificationTime(new Date().toLocaleTimeString())
+        }
+      },
+      (status) => {
+        setConnectionStatus(status)
       }
-    })
+    )
   }, [venueId])
 
-  // 2B. Background Web Worker & Anti-Suspension Keep-Alive
+  // 2B. Foreground Session Recovery on Visibility / Focus
+  // When mobile browser unfreezes after Instagram/WhatsApp, immediately re-sync data without page reload
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && venueId) {
+        fetchData()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('focus', handleVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('focus', handleVisibility)
+    }
+  }, [venueId])
+
+  // 2C. Background Web Worker & Anti-Suspension Keep-Alive
   // Ensures sub-second live notifications even when user switches to Instagram/WhatsApp
   useEffect(() => {
     if (!venueId || !isFollowing) {
@@ -281,12 +318,10 @@ export default function EventFollowPage() {
     if (nextState) {
       const granted = await requestSystemNotificationPermission()
       setSystemPermission(getSystemNotificationPermission())
-      if (granted && venue && occupancy) {
-        // Register device with server-side Web Push (Google FCM / WNS)
-        if (venueId) {
-          subscribeToBackendWebPush(venueId)
-        }
-
+      if (venueId) {
+        await subscribeToBackendWebPush(venueId, true, notificationsEnabled)
+      }
+      if (venue && occupancy) {
         const percent = occupancy.percentage || 0
         const currentCount = occupancy.current_occupancy || 0
         const cap = venue.effective_capacity || occupancy.effective_capacity || 1000
@@ -303,6 +338,31 @@ export default function EventFollowPage() {
         )
       }
       if (soundEnabled) playAlertChime('info')
+    } else {
+      // Unfollowing: inform backend to stop notifications for this device
+      if (venueId) {
+        await toggleBackendNotificationPreference(venueId, false, false)
+      }
+    }
+  }
+
+  // 4B. Toggle Notifications Handler (separate from following)
+  const handleToggleNotifications = async () => {
+    const nextState = !notificationsEnabled
+    setNotificationsEnabled(nextState)
+    localStorage.setItem(`notif_enabled_${venueId}`, String(nextState))
+
+    if (nextState) {
+      const granted = await requestSystemNotificationPermission()
+      setSystemPermission(getSystemNotificationPermission())
+      if (venueId) {
+        await subscribeToBackendWebPush(venueId, isFollowing, true)
+      }
+      if (soundEnabled) playAlertChime('info')
+    } else {
+      if (venueId) {
+        await toggleBackendNotificationPreference(venueId, false, isFollowing)
+      }
     }
   }
 
@@ -385,34 +445,38 @@ export default function EventFollowPage() {
   const netInflow = flow?.net_inflow_per_min ?? (forecast?.net_inflow_rate || 0)
   const timeToCapacity = forecast?.time_to_capacity_minutes ?? null
 
-  // Status colors & text — Using Admin style badges
+  // Status colors & text: NORMAL, MODERATE, HIGH, CRITICAL
+  let severityLevel: 'NORMAL' | 'MODERATE' | 'HIGH' | 'CRITICAL' = 'NORMAL'
   let statusBadge = {
     bg: 'bg-emerald-50 border-emerald-200 text-emerald-800',
     dot: 'bg-emerald-500',
-    label: '🟢 Safe Entry — Smooth Flow',
-    desc: 'Lines are moving steadily. No significant delays at entry gates.',
+    label: '🟢 Safe Entry — Smooth Flow (NORMAL)',
+    desc: 'Crowd density is within normal safety parameters. No significant delays at entry gates.',
   }
 
   if (percent >= 90) {
+    severityLevel = 'CRITICAL'
     statusBadge = {
       bg: 'bg-rose-50 border-rose-200 text-rose-800',
       dot: 'bg-rose-600',
-      label: '🔴 Critical Capacity Reached',
-      desc: 'Venue is near maximum capacity. Entrance gates may be metering or holding arrivals.',
+      label: '🔴 Critical Capacity Alarm (CRITICAL)',
+      desc: 'Venue is near maximum capacity (>=90%). Entrance gates may be metering or holding arrivals.',
     }
   } else if (percent >= 75) {
+    severityLevel = 'HIGH'
     statusBadge = {
       bg: 'bg-amber-50 border-amber-200 text-amber-900',
       dot: 'bg-amber-600',
-      label: '🟡 High Rush — Heavy Inflow',
-      desc: 'Rapidly filling up. Expect moderate queues at main gates.',
+      label: '🟡 High Rush Warning (HIGH)',
+      desc: 'Rapidly filling up (>=75%). Expect queues at main gates.',
     }
-  } else if (timeToCapacity && timeToCapacity <= 20 && netInflow > 5) {
+  } else if (percent >= 60 || (timeToCapacity && timeToCapacity <= 20 && netInflow > 5)) {
+    severityLevel = 'MODERATE'
     statusBadge = {
       bg: 'bg-orange-50 border-orange-200 text-orange-900',
       dot: 'bg-orange-600',
-      label: '🟠 Surge Incoming',
-      desc: `High net crowd velocity! Projected to be full in approximately ${Math.round(timeToCapacity)} minutes.`,
+      label: '🟠 Moderate Crowd Surge (MODERATE)',
+      desc: `High net crowd velocity! Projected to reach high rush in ~${Math.round(timeToCapacity || 15)} minutes.`,
     }
   }
 
@@ -427,7 +491,7 @@ export default function EventFollowPage() {
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
             </span>
             <span className="truncate">
-              <strong>LIVE FOLLOWING:</strong> Continuous crowd updates and time-to-full alerts are active.
+              <strong>LIVE FOLLOWING:</strong> Server is monitoring crowd 24/7. Push notifications arrive even when in Instagram.
             </span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
@@ -493,6 +557,56 @@ export default function EventFollowPage() {
 
       {/* Main Body */}
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 w-full flex-1 flex flex-col gap-5">
+        {/* Live System Health & Connection State Bar */}
+        <div className="rounded-xl bg-white border border-slate-200 px-4 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Live Connection Status Badge */}
+            <div
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold border ${
+                connectionStatus === 'CONNECTED'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : connectionStatus === 'RECONNECTING'
+                  ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
+                  : 'bg-rose-50 text-rose-700 border-rose-200'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  connectionStatus === 'CONNECTED'
+                    ? 'bg-emerald-500'
+                    : connectionStatus === 'RECONNECTING'
+                    ? 'bg-amber-500'
+                    : 'bg-rose-500'
+                }`}
+              />
+              <span>{connectionStatus === 'CONNECTED' ? 'CONNECTED' : connectionStatus === 'RECONNECTING' ? 'RECONNECTING' : 'OFFLINE'}</span>
+            </div>
+
+            {/* Push Notifications Enabled / Disabled Badge */}
+            <div
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold border ${
+                notificationsEnabled && isFollowing
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : 'bg-slate-100 text-slate-600 border-slate-200'
+              }`}
+            >
+              <Bell className="w-3 h-3" />
+              <span>{notificationsEnabled && isFollowing ? 'PUSH NOTIFICATIONS ENABLED' : 'PUSH NOTIFICATIONS DISABLED'}</span>
+            </div>
+
+            {/* Decoupled Backend Processing Notice */}
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-medium bg-blue-50 text-blue-700 border border-blue-200 hidden sm:inline-flex">
+              <ShieldCheck className="w-3 h-3 text-blue-600" />
+              <span>Backend AI Monitoring 24/7 (Decoupled)</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 text-slate-500 text-[11px]">
+            <span>Last Sync: {lastSyncTime.toLocaleTimeString()}</span>
+            {lastNotificationTime && <span>• Last Alert: {lastNotificationTime}</span>}
+          </div>
+        </div>
+
         {/* Event Hero Card */}
         <div className="rounded-xl bg-white border border-slate-200 p-6 sm:p-7 shadow-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
@@ -503,31 +617,48 @@ export default function EventFollowPage() {
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">{venue.name}</h1>
               <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-                {venue.location || 'Monitored Venue'} • Area: {venue.area_sqm} m² • Real-Time AI Tracking Active
+                {venue.location || 'Monitored Venue'} • Area: {venue.area_sqm || venue.usable_area_sqm || 500} m² • Real-Time AI Tracking Active
               </p>
             </div>
 
-            {/* Follow / Notification Action Button */}
-            <button
-              onClick={handleToggleFollow}
-              className={`inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg font-bold text-xs sm:text-sm transition-all shadow-xs shrink-0 ${
-                isFollowing
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white'
-              }`}
-            >
-              {isFollowing ? (
-                <>
-                  <BellRing className="w-4 h-4 animate-bounce" />
-                  <span>Following Live Alerts</span>
-                </>
-              ) : (
-                <>
-                  <Bell className="w-4 h-4" />
-                  <span>Follow &amp; Get Rush Alerts</span>
-                </>
+            {/* Actions: Follow Toggle + Notification Toggle */}
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                onClick={handleToggleFollow}
+                className={`inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-xs sm:text-sm transition-all shadow-xs ${
+                  isFollowing
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
+              >
+                {isFollowing ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Following Event</span>
+                  </>
+                ) : (
+                  <>
+                    <Bell className="w-4 h-4" />
+                    <span>Follow Event</span>
+                  </>
+                )}
+              </button>
+
+              {isFollowing && (
+                <button
+                  onClick={handleToggleNotifications}
+                  className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg font-bold text-xs border transition-all ${
+                    notificationsEnabled
+                      ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
+                      : 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200'
+                  }`}
+                  title={notificationsEnabled ? 'Click to Mute Notifications' : 'Click to Enable Notifications'}
+                >
+                  {notificationsEnabled ? <Bell className="w-3.5 h-3.5 text-blue-600" /> : <VolumeX className="w-3.5 h-3.5 text-slate-500" />}
+                  <span>{notificationsEnabled ? 'Alerts ON' : 'Alerts MUTED'}</span>
+                </button>
               )}
-            </button>
+            </div>
           </div>
 
           {/* Current Status Pill */}
@@ -563,12 +694,18 @@ export default function EventFollowPage() {
                 </span>
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
-                    systemPermission === 'granted'
+                    systemPermission === 'granted' && notificationsEnabled && isFollowing
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : systemPermission === 'granted'
+                      ? 'bg-slate-100 text-slate-700 border-slate-300'
                       : 'bg-amber-50 text-amber-800 border-amber-200'
                   }`}
                 >
-                  {systemPermission === 'granted' ? 'NOTIFICATION SHADE ACTIVE' : 'SETUP REQUIRED'}
+                  {systemPermission === 'granted' && notificationsEnabled && isFollowing
+                    ? 'PUSH NOTIFICATIONS ENABLED'
+                    : systemPermission === 'granted'
+                    ? 'PUSH NOTIFICATIONS DISABLED'
+                    : 'PERMISSION REQUIRED'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5 max-w-xl">

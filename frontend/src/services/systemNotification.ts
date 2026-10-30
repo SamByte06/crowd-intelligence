@@ -28,7 +28,11 @@ function urlB64ToUint8Array(base64String: string): Uint8Array {
  * Subscribes the device to server-side Web Push (VAPID / Google FCM).
  * Pushes alerts from the server directly to the phone even if Chrome is closed or inside Instagram!
  */
-export async function subscribeToBackendWebPush(venueId: string): Promise<boolean> {
+export async function subscribeToBackendWebPush(
+  venueId: string,
+  isFollowing: boolean = true,
+  notificationsEnabled: boolean = true
+): Promise<boolean> {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
     return false
   }
@@ -59,6 +63,10 @@ export async function subscribeToBackendWebPush(venueId: string): Promise<boolea
       applicationServerKey: appKey as unknown as BufferSource,
     })
 
+    if (sub?.endpoint) {
+      localStorage.setItem(`push_endpoint_${venueId}`, sub.endpoint)
+    }
+
     // Register subscription with backend
     const regRes = await fetch('/api/v1/push/subscribe', {
       method: 'POST',
@@ -66,12 +74,41 @@ export async function subscribeToBackendWebPush(venueId: string): Promise<boolea
       body: JSON.stringify({
         venue_id: venueId,
         subscription: sub.toJSON(),
+        is_following: isFollowing,
+        notifications_enabled: notificationsEnabled,
       }),
     })
 
     return regRes.ok
   } catch (err) {
     console.warn('Backend Web Push subscription note:', err)
+    return false
+  }
+}
+
+/**
+ * Toggles notification or follow state on the backend without requiring a new VAPID subscription.
+ */
+export async function toggleBackendNotificationPreference(
+  venueId: string,
+  notificationsEnabled?: boolean,
+  isFollowing?: boolean
+): Promise<boolean> {
+  const endpoint = localStorage.getItem(`push_endpoint_${venueId}`)
+  if (!endpoint) return false
+  try {
+    const res = await fetch('/api/v1/push/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        venue_id: venueId,
+        endpoint,
+        notifications_enabled: notificationsEnabled,
+        is_following: isFollowing,
+      }),
+    })
+    return res.ok
+  } catch {
     return false
   }
 }

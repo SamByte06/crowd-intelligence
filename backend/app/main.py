@@ -106,6 +106,54 @@ def _setup_crossing_handler():
     camera_manager.on_status_change(handle_status_change)
 
 
+def _start_all_active_venues():
+    """
+    Ensure all active venues and their configured gates are running in CameraManager on server boot.
+    Completely decouples CCTV capture, YOLO detection, ByteTrack tracking, and gate counting
+    from whether any frontend browser tab is open or connected.
+    """
+    db = SessionLocal()
+    try:
+        from app.models.venue import Venue
+        from app.models.gate import Gate
+        from app.services.gate_counter import LineCrossingConfig
+
+        venues = db.query(Venue).filter(Venue.is_active == True).all()
+        logger.info(f"Auto-starting camera processing workers for {len(venues)} active venues...")
+        for v in venues:
+            gates = db.query(Gate).filter(Gate.venue_id == v.id).all()
+            for g in gates:
+                if not camera_manager.is_running(g.id):
+                    source = g.camera_source
+                    if isinstance(source, str):
+                        source = source.strip().strip('"').strip("'")
+                        if source.isdigit():
+                            source = int(source)
+                    line_cfg = LineCrossingConfig(
+                        start_x=g.line_start_x,
+                        start_y=g.line_start_y,
+                        end_x=g.line_end_x,
+                        end_y=g.line_end_y,
+                        counting_direction=g.counting_direction or "any",
+                        gate_type=g.gate_type.value if hasattr(g.gate_type, "value") else str(g.gate_type),
+                        single_pass_only=False,
+                    )
+                    camera_manager.start_gate(
+                        gate_id=g.id,
+                        venue_id=v.id,
+                        camera_source=source,
+                        line_config=line_cfg,
+                        confidence=g.confidence_threshold or 0.25,
+                        frame_skip=g.frame_skip or 2,
+                        gate_name=g.display_name,
+                        counting_enabled=True,
+                    )
+    except Exception as e:
+        logger.error(f"Error starting active venues on startup: {e}")
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle: startup and shutdown."""
@@ -120,7 +168,9 @@ async def lifespan(app: FastAPI):
     if os.environ.get("TESTING") != "1":
         init_db()
     _setup_crossing_handler()
-    logger.info("Database initialized, camera manager ready")
+    # Fully decouple monitoring from frontend: auto-start all cameras on server startup
+    _start_all_active_venues()
+    logger.info("Database initialized, all camera workers and AI tracking active on backend")
 
     # Periodic background alert evaluator and server-side Web Push dispatcher
     # Dispatches alerts & silent timeline straight into subscriber devices via Google FCM even if browser is closed / in Instagram
@@ -129,6 +179,7 @@ async def lifespan(app: FastAPI):
         last_percent_seen = {}
         last_alert_level = {}
         last_alert_time = {}
+        severity_weights = {"NORMAL": 0, "MODERATE": 1, "HIGH": 2, "CRITICAL": 3}
 
         while True:
             try:
@@ -147,30 +198,43 @@ async def lifespan(app: FastAPI):
                         count = v.current_occupancy or 0
                         pct = round((count / cap) * 100, 1) if cap > 0 else 0
 
-                        # 1. Evaluate alert severity level
+                        # Check if admin stopped the notification campaign
+                        campaign_active = getattr(v, "notification_campaign_active", True)
+                        reminder_interval = getattr(v, "reminder_interval_seconds", 60) or 60
+
+                        # 1. Evaluate alert severity level: NORMAL, MODERATE, HIGH, CRITICAL
                         crit_thresh = (v.critical_threshold * 100) if v.critical_threshold else 90.0
-                        warn_thresh = (v.warning_threshold * 100) if v.warning_threshold else 75.0
+                        high_thresh = (v.warning_threshold * 100) if v.warning_threshold else 75.0
+                        mod_thresh = (v.moderate_threshold * 100) if getattr(v, "moderate_threshold", None) else 60.0
 
                         if pct >= crit_thresh:
                             level = "CRITICAL"
-                        elif pct >= warn_thresh:
-                            level = "WARNING"
+                        elif pct >= high_thresh:
+                            level = "HIGH"
+                        elif pct >= mod_thresh:
+                            level = "MODERATE"
                         else:
                             level = "NORMAL"
 
                         prev_level = last_alert_level.get(v.id, "NORMAL")
                         prev_alert_t = last_alert_time.get(v.id, 0)
 
-                        # Urgent Push on level escalation or reminder every 5 min if remaining critical/warning
-                        if level != "NORMAL" and (level != prev_level or (now - prev_alert_t >= 300)):
+                        is_escalation = severity_weights.get(level, 0) > severity_weights.get(prev_level, 0)
+                        is_reminder = (level == prev_level and level != "NORMAL" and (now - prev_alert_t >= reminder_interval))
+
+                        if campaign_active and level != "NORMAL" and (is_escalation or is_reminder):
                             last_alert_level[v.id] = level
                             last_alert_time[v.id] = now
+
                             if level == "CRITICAL":
                                 title = f"🚨 CRITICAL CROWD ALARM • {v.name}"
-                                body = f"Occupancy reached {pct}% ({count}/{cap})! High congestion detected at gates."
-                            else:
+                                body = f"Critical threshold reached! {pct}% capacity ({count}/{cap}). Urgent gate holds and flow restrictions in effect."
+                            elif level == "HIGH":
                                 title = f"⚠️ HIGH RUSH WARNING • {v.name}"
-                                body = f"Venue is now {pct}% full ({count}/{cap}). Entry queues are building up."
+                                body = f"Venue has reached {pct}% capacity ({count}/{cap}). Substantial queues forming at gates."
+                            else:
+                                title = f"🟡 MODERATE RUSH ALERT • {v.name}"
+                                body = f"Crowd density rising: {pct}% full ({count}/{cap}). Moderate influx detected."
 
                             broadcast_web_push(
                                 venue_id=v.id,
@@ -179,8 +243,18 @@ async def lifespan(app: FastAPI):
                                 severity=level,
                                 tag=f"crowd-alert-{level.lower()}",
                             )
+
                         elif level == "NORMAL" and prev_level != "NORMAL":
+                            # Crowd returned to NORMAL: stop recurring reminders and send resolution notification
                             last_alert_level[v.id] = "NORMAL"
+                            if campaign_active:
+                                broadcast_web_push(
+                                    venue_id=v.id,
+                                    title=f"🟢 CROWD NORMALIZED • {v.name}",
+                                    body=f"Crowd conditions have normalized to {pct}% ({count}/{cap}). Safe flow restored at all gates.",
+                                    severity="NORMAL",
+                                    tag="crowd-alert-resolved",
+                                )
 
                         # 2. Silent Live Timeline Push (Flipkart / Zomato style) every 15s or on >= 1% change
                         prev_time = last_timeline_time.get(v.id, 0)
@@ -197,8 +271,8 @@ async def lifespan(app: FastAPI):
                                 time_to_cap = None
                                 inflow = 0
 
-                            status_emoji = "🔴" if pct >= 90 else ("🟡" if pct >= 75 else "🟢")
-                            status_word = "CRITICAL CAPACITY" if pct >= 90 else ("HIGH RUSH" if pct >= 75 else "SAFE FLOW")
+                            status_emoji = "🔴" if pct >= 90 else ("🟡" if pct >= 75 else ("🟠" if pct >= 60 else "🟢"))
+                            status_word = "CRITICAL CAPACITY" if pct >= 90 else ("HIGH RUSH" if pct >= 75 else ("MODERATE RUSH" if pct >= 60 else "SAFE FLOW"))
                             time_text = f"Full in ~{round(time_to_cap)}m" if (time_to_cap and time_to_cap > 0) else ("Area FULL" if pct >= 100 else "Steady Flow")
                             flow_text = f"+{inflow:.0f}/m" if inflow > 0 else f"{inflow:.0f}/m"
 
@@ -218,6 +292,8 @@ async def lifespan(app: FastAPI):
                     db.close()
             except asyncio.CancelledError:
                 break
+            except Exception:
+                pass
             except Exception:
                 pass
 
