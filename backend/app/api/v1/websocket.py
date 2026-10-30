@@ -140,7 +140,7 @@ async def video_streams_ws(websocket: WebSocket, venue_id: str):
                             # 36-byte ASCII header padded with spaces + JPEG payload
                             header = gate_id.encode("ascii")[:36].ljust(36, b" ")
                             await websocket.send_bytes(header + jpeg)
-            await asyncio.sleep(0.033)
+            await asyncio.sleep(0.08)
     except WebSocketDisconnect:
         logger.info(f"Video streams multiplexer disconnected for venue {venue_id}")
     except Exception as e:
@@ -185,18 +185,6 @@ def _get_venue_state(venue_id: str) -> dict | None:
         forecast_data = ForecastService.forecast(db, venue_id)
         active_alerts = AlertService.get_active_alerts(db, venue_id)
 
-        # Evaluate alerts (side effect: creates new alerts if conditions met)
-        AlertService.evaluate(db, venue_id)
-
-        # Save snapshot
-        OccupancyService.save_snapshot(
-            db, venue_id,
-            entry_rate=flow["entry_rate_per_min"],
-            exit_rate=flow["exit_rate_per_min"],
-            net_inflow=flow["net_inflow_per_min"],
-        )
-
-        ensure_venue_gates_running(venue_id)
         from app.models.gate import Gate
         gates = db.query(Gate).filter(Gate.venue_id == venue_id).all()
         gate_data = [

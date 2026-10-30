@@ -138,7 +138,7 @@ export default function EventFollowPage() {
 
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 4000)
+    const interval = setInterval(fetchData, 12000)
     return () => clearInterval(interval)
   }, [venueId])
 

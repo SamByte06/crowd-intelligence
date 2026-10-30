@@ -79,7 +79,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchPushData()
-    const intv = setInterval(fetchPushData, 8000)
+    const intv = setInterval(fetchPushData, 20000)
     return () => clearInterval(intv)
   }, [fetchPushData])
 
@@ -312,10 +312,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData()
-    // 4-second poll as lightweight backup; WebSocket handles real-time pushes
+    // 15-second quiet fallback poll; WebSocket handles real-time sub-second updates
     const pollInterval = setInterval(() => {
       fetchData(true)
-    }, 4000)
+    }, 15000)
     return () => clearInterval(pollInterval)
   }, [fetchData])
 

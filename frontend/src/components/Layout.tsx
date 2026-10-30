@@ -51,7 +51,7 @@ export default function Layout() {
 
   useEffect(() => {
     checkHealth()
-    const interval = setInterval(checkHealth, 10000)
+    const interval = setInterval(checkHealth, 25000)
     return () => clearInterval(interval)
   }, [])
 
