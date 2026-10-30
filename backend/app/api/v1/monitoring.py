@@ -246,7 +246,7 @@ def subscribe_push(payload: PushSubscriptionPayload, db: Session = Depends(get_d
             broadcast_web_push(
                 venue_id=payload.venue_id,
                 title=f"{status_emoji} {status_word}: {venue.name}",
-                body=f"⏱️ Live Monitoring Active  |  👥 {pct}% ({count}/{cap})\n⚡ Alerts connected! You will receive updates even when on Instagram.",
+                body=f"⏱️ Live Monitoring Active  |  👥 {pct}% ({count}/{cap})\n⚡ Notifications enabled. You will receive updates directly on your device.",
                 severity="NORMAL",
                 tag="live-crowd-timeline",
             )
@@ -344,7 +344,7 @@ def update_campaign_settings(venue_id: str, payload: CampaignSettingsPayload, db
 
 @router.post("/push/test")
 async def test_push(payload: PushTestPayload, db: Session = Depends(get_db)):
-    """Trigger an immediate or delayed real native Web Push directly through Google FCM/WNS."""
+    """Trigger a test push notification."""
     venue = db.query(Venue).filter(Venue.id == payload.venue_id).first()
     venue_name = venue.name if venue else "Monitored Event"
 
@@ -356,7 +356,7 @@ async def test_push(payload: PushTestPayload, db: Session = Depends(get_db)):
             broadcast_web_push(
                 venue_id=payload.venue_id,
                 title=f"🚨 Live Background Rush Alert • {venue_name}",
-                body="⚡ Push confirmed in background! This alert arrived while you were using Instagram or with your screen locked.",
+                body="Background push confirmed. Notifications are delivered to your device even when the browser is minimized.",
                 severity="WARNING",
                 tag="test-delayed-push",
             )
@@ -367,7 +367,7 @@ async def test_push(payload: PushTestPayload, db: Session = Depends(get_db)):
     sent_count = broadcast_web_push(
         venue_id=payload.venue_id,
         title=f"🔔 Live Phone Push Alert • {venue_name}",
-        body="⚡ Instant Background Alert: You are actively connected! This alert arrives even when browsing Instagram, WhatsApp, or when your phone is locked.",
+        body="Live alert test confirmed. Push notifications are functioning properly on this device.",
         severity="WARNING",
         tag="test-push",
     )

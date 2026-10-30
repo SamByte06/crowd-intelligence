@@ -1,10 +1,7 @@
-// ==============================================================================
-// AI Crowd Intelligence — Dedicated Background Web Worker
-// Runs in a background thread unaffected by browser tab visibility throttling
-// ==============================================================================
+// Background web worker for polling venue state
 
 let activeVenueId = null;
-let pollInterval = 3000; // 3-second rapid background polling
+let pollInterval = 3000;
 let timerId = null;
 
 self.onmessage = function (e) {

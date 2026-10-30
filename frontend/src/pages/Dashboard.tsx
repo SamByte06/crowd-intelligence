@@ -840,9 +840,9 @@ export default function Dashboard() {
               <Bell className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-900">Mobile Public Followers &amp; Push Notification Engine</h2>
+              <h2 className="text-sm font-bold text-slate-900">Followers &amp; Push Notification Management</h2>
               <p className="text-xs text-slate-500">
-                Autonomous server-side Web Push dispatches crowd alerts to followers even when phones are locked or on Instagram.
+                Server-side web push dispatches crowd alerts to subscribed followers.
               </p>
             </div>
           </div>

@@ -107,11 +107,7 @@ def _setup_crossing_handler():
 
 
 def _start_all_active_venues():
-    """
-    Ensure all active venues and their configured gates are running in CameraManager on server boot.
-    Completely decouples CCTV capture, YOLO detection, ByteTrack tracking, and gate counting
-    from whether any frontend browser tab is open or connected.
-    """
+    """Start camera processing for active venues on server boot."""
     db = SessionLocal()
     try:
         from app.models.venue import Venue
@@ -168,12 +164,10 @@ async def lifespan(app: FastAPI):
     if os.environ.get("TESTING") != "1":
         init_db()
     _setup_crossing_handler()
-    # Fully decouple monitoring from frontend: auto-start all cameras on server startup
     _start_all_active_venues()
-    logger.info("Database initialized, all camera workers and AI tracking active on backend")
+    logger.info("Database initialized and camera workers active")
 
-    # Periodic background alert evaluator and server-side Web Push dispatcher
-    # Dispatches alerts & silent timeline straight into subscriber devices via Google FCM even if browser is closed / in Instagram
+    # Background alert worker for crowd condition checks and push notifications
     async def alert_background_worker():
         last_timeline_time = {}
         last_percent_seen = {}

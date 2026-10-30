@@ -40,7 +40,7 @@ import {
   triggerBackendTestPush
 } from '../services/systemNotification'
 
-// Gentle synthesized audio chime using Web Audio API (Zero external mp3 needed)
+// Audio chime using Web Audio API
 function playAlertChime(severity: 'warning' | 'critical' | 'info') {
   try {
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext
@@ -97,7 +97,7 @@ export default function EventFollowPage() {
 
   const lastStateRef = useRef<string>('')
 
-  // 1. Initial Load & Service Worker Registration + Web Push Auto-Sync
+  // Service worker registration and push subscription
   useEffect(() => {
     registerServiceWorker().then(() => {
       const perm = getSystemNotificationPermission()
@@ -139,7 +139,7 @@ export default function EventFollowPage() {
     return () => clearInterval(interval)
   }, [venueId])
 
-  // 2. Resilient WebSocket Listener with auto-reconnection and heartbeat
+  // WebSocket listener
   useEffect(() => {
     if (!venueId) return
     return connectWebSocket(
@@ -165,8 +165,7 @@ export default function EventFollowPage() {
     )
   }, [venueId])
 
-  // 2B. Foreground Session Recovery on Visibility / Focus
-  // When mobile browser unfreezes after Instagram/WhatsApp, immediately re-sync data without page reload
+  // Re-sync on visibility change
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible' && venueId) {
@@ -181,8 +180,7 @@ export default function EventFollowPage() {
     }
   }, [venueId])
 
-  // 2C. Background Web Worker & Anti-Suspension Keep-Alive
-  // Ensures sub-second live notifications even when user switches to Instagram/WhatsApp
+  // Background monitoring state
   useEffect(() => {
     if (!venueId || !isFollowing) {
       stopAudioKeepAlive()
@@ -220,14 +218,13 @@ export default function EventFollowPage() {
     }
   }, [venueId, isFollowing, venue?.name])
 
-  // Tracking refs for silent timeline vs urgent alarm separation
+  // Tracking refs for notifications
   const lastTimelineTimeRef = useRef<number>(0)
   const lastTimelinePercentRef = useRef<number>(-1)
   const lastAlertLevelRef = useRef<'NORMAL' | 'WARNING' | 'CRITICAL'>('NORMAL')
   const lastAlertTimeRef = useRef<number>(0)
 
-  // 3A. Persistent Silent Live Timeline Notification (Flipkart / Delivery-Tracker Style)
-  // Updates smoothly in-place in the notification drawer WITHOUT buzzing, ringing, or creating multiple cards
+  // Ongoing timeline status notification
   useEffect(() => {
     if (!venue || !occupancy || !isFollowing) return
 
@@ -238,7 +235,7 @@ export default function EventFollowPage() {
     const timeToCap = forecast?.time_to_capacity_minutes ?? null
     const netInflow = flow?.net_inflow_per_min ?? (forecast?.net_inflow_rate || 0)
 
-    // Update timeline if at least 10 seconds have passed OR percent changed by >= 1%
+    // Update timeline if 10s elapsed or percent changed
     const timeElapsed = now - lastTimelineTimeRef.current >= 10000
     const percentChanged = Math.abs(percent - lastTimelinePercentRef.current) >= 1
 
@@ -264,8 +261,7 @@ export default function EventFollowPage() {
     venue?.name
   ])
 
-  // 3B. Separate Urgent Alarms (Moderate / Warning & Critical)
-  // Only fires when crossing a threshold boundary (e.g. crossing 75% or 90%) with 5-min cooldown
+  // Threshold alerts (moderate or critical)
   useEffect(() => {
     if (!venue || !occupancy || !isFollowing) return
 
@@ -282,7 +278,7 @@ export default function EventFollowPage() {
     }
 
     const prevLevel = lastAlertLevelRef.current
-    const cooldownPassed = now - lastAlertTimeRef.current >= 300000 // 5 minutes cooldown
+    const cooldownPassed = now - lastAlertTimeRef.current >= 300000 // 5 min cooldown
 
     if (currentLevel !== 'NORMAL' && (currentLevel !== prevLevel || cooldownPassed)) {
       lastAlertLevelRef.current = currentLevel
@@ -309,7 +305,7 @@ export default function EventFollowPage() {
     venue?.name
   ])
 
-  // 4. Toggle Follow Handler
+  // Follow event toggle handler
   const handleToggleFollow = async () => {
     const nextState = !isFollowing
     setIsFollowing(nextState)
@@ -339,14 +335,13 @@ export default function EventFollowPage() {
       }
       if (soundEnabled) playAlertChime('info')
     } else {
-      // Unfollowing: inform backend to stop notifications for this device
       if (venueId) {
         await toggleBackendNotificationPreference(venueId, false, false)
       }
     }
   }
 
-  // 4B. Toggle Notifications Handler (separate from following)
+  // Notification toggle handler
   const handleToggleNotifications = async () => {
     const nextState = !notificationsEnabled
     setNotificationsEnabled(nextState)
@@ -385,8 +380,7 @@ export default function EventFollowPage() {
     }
   }
 
-  // 5B. Background Test Trigger with 5-Second Delay
-  // Gives the user 5 seconds to switch to Instagram or lock their screen, then server pushes to FCM!
+  // Delayed background test trigger
   const handleDelayedBgTest = async () => {
     let granted = systemPermission === 'granted'
     if (!granted) {
@@ -491,7 +485,7 @@ export default function EventFollowPage() {
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
             </span>
             <span className="truncate">
-              <strong>LIVE FOLLOWING:</strong> Server is monitoring crowd 24/7. Push notifications arrive even when in Instagram.
+              <strong>LIVE FOLLOWING:</strong> Real-time crowd monitoring active. Push notifications enabled.
             </span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
@@ -594,10 +588,10 @@ export default function EventFollowPage() {
               <span>{notificationsEnabled && isFollowing ? 'PUSH NOTIFICATIONS ENABLED' : 'PUSH NOTIFICATIONS DISABLED'}</span>
             </div>
 
-            {/* Decoupled Backend Processing Notice */}
+            {/* Background Monitoring Indicator */}
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-medium bg-blue-50 text-blue-700 border border-blue-200 hidden sm:inline-flex">
               <ShieldCheck className="w-3 h-3 text-blue-600" />
-              <span>Backend AI Monitoring 24/7 (Decoupled)</span>
+              <span>Live Monitoring Active</span>
             </div>
           </div>
 
@@ -747,13 +741,13 @@ export default function EventFollowPage() {
                       ? 'bg-amber-500 text-white animate-pulse'
                       : 'bg-blue-600 hover:bg-blue-700 text-white'
                   }`}
-                  title="Fires push in 5s so you can switch to Instagram to test background delivery"
+                  title="Sends push notification after 5 seconds to test background delivery"
                 >
                   <Smartphone className="w-3.5 h-3.5" />
                   <span>
                     {bgCountdown !== null
-                      ? `Switch to Instagram! (${bgCountdown}s)`
-                      : '📲 Test in Background (Switch to Instagram in 5s)'}
+                      ? `Sending in ${bgCountdown}s...`
+                      : '📲 Test Background Push (5s delay)'}
                   </span>
                 </button>
               </>

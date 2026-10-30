@@ -32,14 +32,7 @@ main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 @router.websocket("/ws/dashboard/{venue_id}")
 async def dashboard_ws(websocket: WebSocket, venue_id: str):
-    """
-    WebSocket endpoint for live dashboard & attendee updates.
-    Features:
-    - Initial state push on connect
-    - Continuous event-driven & periodic broadcasts
-    - Bidirectional heartbeat ping/pong to prevent Cloudflare Tunnel timeouts
-    - Graceful cleanup of suspended mobile browser connections
-    """
+    """WebSocket endpoint for live dashboard and attendee updates."""
     await websocket.accept()
     active_connections.add(websocket)
     connected_venues[websocket] = venue_id

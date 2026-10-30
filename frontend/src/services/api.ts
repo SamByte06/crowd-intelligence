@@ -133,7 +133,7 @@ export const monitorApi = {
     request<any>('/push/toggle', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-// --- Resilient WebSocket with Heartbeat, Backoff, and Background Auto-Recovery ---
+// WebSocket connection helper
 export type ConnectionStatus = 'CONNECTED' | 'RECONNECTING' | 'OFFLINE';
 
 export function connectWebSocket(
@@ -173,7 +173,7 @@ export function connectWebSocket(
         retryCount = 0;
         setStatus('CONNECTED');
 
-        // Start bidirectional heartbeat ping every 20 seconds to prevent Cloudflare Tunnel timeouts
+        // Ping server every 20s to keep connection alive
         heartbeatTimer = setInterval(() => {
           if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'ping', time: Date.now() }));
@@ -195,7 +195,7 @@ export function connectWebSocket(
         if (!active) return;
         clearTimers();
         setStatus('RECONNECTING');
-        // Exponential backoff: 1s, 2s, 4s, 8s, up to 12s max
+        // Reconnect with backoff
         const delay = Math.min(12000, 1000 * Math.pow(1.5, retryCount));
         retryCount++;
         reconnectTimer = setTimeout(connect, delay);
@@ -214,7 +214,7 @@ export function connectWebSocket(
     }
   };
 
-  // Immediate recovery when mobile user switches back from Instagram or unlocks screen
+  // Reconnect when tab becomes active again
   const handleVisibilityChange = () => {
     if (!active) return;
     if (document.visibilityState === 'visible') {

@@ -1,16 +1,10 @@
-/**
- * System-Level Notification & Background Keep-Alive Service
- * Dispatches notifications directly into the operating system notification shade:
- * - Windows Action Center / Notification Tray
- * - Android Notification Drawer
- * - macOS Notification Center
- */
+// Notification service for system and push notifications
 
 let keepAliveAudioCtx: AudioContext | null = null
 let keepAliveOsc: OscillatorNode | null = null
 let keepAliveAudioElement: HTMLAudioElement | null = null
 
-// Standard 44-byte silent WAV data URI
+// Silent WAV audio data URI
 const SILENT_WAV_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
 
 function urlB64ToUint8Array(base64String: string): Uint8Array {
@@ -24,10 +18,7 @@ function urlB64ToUint8Array(base64String: string): Uint8Array {
   return outputArray
 }
 
-/**
- * Subscribes the device to server-side Web Push (VAPID / Google FCM).
- * Pushes alerts from the server directly to the phone even if Chrome is closed or inside Instagram!
- */
+// Subscribe device to backend web push notifications
 export async function subscribeToBackendWebPush(
   venueId: string,
   isFollowing: boolean = true,
@@ -86,9 +77,7 @@ export async function subscribeToBackendWebPush(
   }
 }
 
-/**
- * Toggles notification or follow state on the backend without requiring a new VAPID subscription.
- */
+// Update notification or follow preference on backend
 export async function toggleBackendNotificationPreference(
   venueId: string,
   notificationsEnabled?: boolean,
@@ -113,10 +102,7 @@ export async function toggleBackendNotificationPreference(
   }
 }
 
-/**
- * Triggers a real server-side push test to verify delivery to mobile notification tray.
- * If delaySeconds > 0, the server waits that long before dispatching, allowing user to switch to Instagram!
- */
+// Send test push notification from backend
 export async function triggerBackendTestPush(venueId: string, delaySeconds: number = 0): Promise<boolean> {
   try {
     const res = await fetch('/api/v1/push/test', {
@@ -175,10 +161,7 @@ export interface SystemNotificationOptions {
   vibrate?: number[]
 }
 
-/**
- * Dispatches a native OS system notification.
- * Uses ServiceWorker registration (mandatory for Android & backgrounded Windows desktop tabs).
- */
+// Show local notification via service worker or DOM API
 export async function sendSystemNotification(
   title: string,
   options: SystemNotificationOptions
@@ -204,7 +187,7 @@ export async function sendSystemNotification(
     data: options.data || { url: window.location.pathname },
   }
 
-  // 1. Primary: Service Worker Registration (Required for Android & Background Tabs)
+  // Use service worker notification if available
   if ('serviceWorker' in navigator) {
     try {
       const reg = await navigator.serviceWorker.ready
@@ -217,7 +200,7 @@ export async function sendSystemNotification(
     }
   }
 
-  // 2. Secondary Fallback: Direct DOM Notification
+  // Fallback to Notification constructor
   try {
     new Notification(title, notificationPayload)
     return true
@@ -227,10 +210,7 @@ export async function sendSystemNotification(
   }
 }
 
-/**
- * Informs the Service Worker to autonomously monitor the venue in background.
- * Works even if tab is frozen or user switched to Instagram / WhatsApp!
- */
+// Register venue for background monitoring in service worker
 export async function startBackgroundServiceWorkerMonitoring(
   venueId: string,
   venueName: string
@@ -265,34 +245,25 @@ export async function stopBackgroundServiceWorkerMonitoring(venueId: string): Pr
   }
 }
 
-/**
- * Starts an inaudible, silent HTML5 Audio loop and MediaSession registration.
- * This instructs the OS / mobile browser NOT to suspend or kill the background tab
- * when the user switches to Instagram, WhatsApp, or locks the phone.
- */
+// Background audio keep-alive to prevent tab sleep on mobile
 export function startAudioKeepAlive(venueName: string = 'Crowd Intelligence'): void {
   try {
-    // 1. HTML5 Audio Element Loop (Primary Android Background Keep-Alive)
     if (!keepAliveAudioElement) {
       keepAliveAudioElement = new Audio(SILENT_WAV_URI)
       keepAliveAudioElement.loop = true
-      keepAliveAudioElement.volume = 0.01 // Minimal non-zero volume allows MediaSession on Android
-      keepAliveAudioElement.play().catch(() => {
-        // User gesture may be required on some strict browsers
-      })
+      keepAliveAudioElement.volume = 0.01
+      keepAliveAudioElement.play().catch(() => {})
     }
 
-    // 2. MediaSession Registration (tells Android OS this is an active foreground task)
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: 'Crowd Intelligence Live Monitoring',
+        title: 'Crowd Intelligence Monitoring',
         artist: venueName,
-        album: 'Active Background Guard',
+        album: 'Live Crowd Monitor',
       })
       navigator.mediaSession.playbackState = 'playing'
     }
 
-    // 3. AudioContext Oscillator (Desktop fallback)
     if (!keepAliveAudioCtx) {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
       if (AudioContextClass) {
@@ -336,10 +307,7 @@ export function stopAudioKeepAlive(): void {
   }
 }
 
-/**
- * Updates the persistent silent live timeline notification (Flipkart/Zomato style).
- * Updates in-place without buzzing, ringing, or creating multiple cards.
- */
+// Update ongoing crowd timeline notification
 export async function updateLiveTimelineNotification(
   venueName: string,
   percent: number,
@@ -373,10 +341,7 @@ export async function updateLiveTimelineNotification(
   })
 }
 
-/**
- * Dispatches an urgent threshold alarm (Moderate/Warning or Critical).
- * Sends separately with ring & vibrate only when a threshold boundary is breached.
- */
+// Send urgent crowd alert notification
 export async function sendUrgentAlertNotification(
   venueName: string,
   severity: 'WARNING' | 'CRITICAL',
@@ -395,9 +360,7 @@ export async function sendUrgentAlertNotification(
   })
 }
 
-/**
- * Triggers a test system notification so user can verify it pops up in their OS tray.
- */
+// Send test notification
 export async function sendTestNotification(venueName: string = 'Current Venue'): Promise<boolean> {
   return sendSystemNotification(`🔔 Notification Test: ${venueName}`, {
     body: 'System notifications are active! Live timeline updates quietly in place, and urgent alerts buzz separately.',

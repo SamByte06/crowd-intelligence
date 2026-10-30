@@ -1,8 +1,5 @@
 """
-Web Push Service — Dispatches real native push notifications to subscriber devices
-via VAPID and browser push services (Google FCM / Mozilla Push / WNS).
-Guarantees notifications arrive on mobile devices even if browser is closed or in Instagram.
-Features database persistence, subscription state toggles, and notification delivery history.
+Web push service for sending notifications to subscribed clients using VAPID.
 """
 
 import os
@@ -272,14 +269,10 @@ def broadcast_web_push(
     tag: str = "crowd-alert",
 ) -> int:
     """
-    Directly deliver native Web Push notification to all subscriber devices.
-    Pushes via Google FCM / Mozilla Push Service straight into device OS notification bar.
-    Only sends to subscribers who have notifications_enabled = True.
-    Saves an audit log into NotificationHistory table.
-    Returns the number of devices successfully messaged.
+    Send web push notifications to all active subscribers of a venue.
     """
     raw_subscribers = _subscriptions.get(venue_id, [])
-    # Filter to users who have notifications turned ON and are following
+    # Filter subscribers with notifications enabled
     subscribers = [s for s in raw_subscribers if s.get("notifications_enabled", True) and s.get("is_following", True)]
     if not subscribers:
         logger.debug(f"broadcast_web_push: no active subscribers for venue {venue_id}")

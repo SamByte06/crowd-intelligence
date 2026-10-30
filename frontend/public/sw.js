@@ -1,7 +1,4 @@
-// ==============================================================================
-// AI Crowd Intelligence — Service Worker for System-Level Push Notifications
-// Operates autonomously in background even when user moves to Instagram/other apps
-// ==============================================================================
+// Service worker for push notifications and background crowd alerts
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -11,8 +8,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-// 1. Native Web Push Event: Receives real push from Google FCM / Backend
-// Delivers notification straight to phone even if browser is closed / in Instagram!
+// Listen for incoming push notifications from backend
 self.addEventListener('push', (event) => {
   let data = {};
   if (event.data) {
@@ -42,7 +38,7 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// 2. Click on notification brings user directly back to the active event page
+// Open event page on notification click
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const urlToOpen = event.notification.data?.url || '/';
@@ -63,7 +59,7 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-// 2B. Handle Push Subscription Change / Expiry (automatic re-registration)
+// Re-subscribe if subscription changes or expires
 self.addEventListener('pushsubscriptionchange', (event) => {
   event.waitUntil(
     self.registration.pushManager.subscribe(event.oldSubscription ? event.oldSubscription.options : { userVisibleOnly: true })
@@ -80,11 +76,11 @@ self.addEventListener('pushsubscriptionchange', (event) => {
   );
 });
 
-// Track monitored venues for autonomous background monitoring in service worker
+// Background venue polling state
 const monitoredVenues = new Map();
 let swPollIntervalId = null;
 
-// 3. Handle commands from frontend tabs
+// Messages from frontend
 self.addEventListener('message', (event) => {
   if (!event.data) return;
 
@@ -162,7 +158,7 @@ async function checkAllMonitoredVenues() {
       const venueName = state.name || occ.venue_name || 'Event';
       const now = Date.now();
 
-      // A. Silent In-Place Live Timeline Update (every 12 seconds or when % changes)
+      // Update live timeline status
       const timeElapsed = now - state.lastTimelineTime >= 12000;
       const percentChanged = Math.abs(percent - state.lastPercent) >= 1;
 
@@ -196,7 +192,7 @@ async function checkAllMonitoredVenues() {
         });
       }
 
-      // B. Separate Urgent Alarms (Moderate / Critical)
+      // Check for urgent alerts (moderate or critical)
       let currentLevel = 'NORMAL';
       if (percent >= 90) {
         currentLevel = 'CRITICAL';
