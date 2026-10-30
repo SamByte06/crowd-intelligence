@@ -45,7 +45,7 @@ async def dashboard_ws(websocket: WebSocket, venue_id: str):
             await websocket.send_json({"type": "initial_state", "data": state})
 
         while True:
-            await asyncio.sleep(settings.WS_BROADCAST_INTERVAL)
+            await asyncio.sleep(4.0)
             cur_state = _get_venue_state(venue_id)
             if cur_state:
                 await websocket.send_json({"type": "update", "data": cur_state})
@@ -140,12 +140,14 @@ async def video_streams_ws(websocket: WebSocket, venue_id: str):
                             # 36-byte ASCII header padded with spaces + JPEG payload
                             header = gate_id.encode("ascii")[:36].ljust(36, b" ")
                             await websocket.send_bytes(header + jpeg)
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(0.12)
     except WebSocketDisconnect:
         logger.info(f"Video streams multiplexer disconnected for venue {venue_id}")
     except Exception as e:
         logger.debug(f"Video streams multiplexer error: {e}")
 
+
+_last_broadcast_times: dict[str, float] = {}
 
 async def broadcast_venue_state(venue_id: str):
     """Broadcast current venue state immediately to all listening clients."""
@@ -163,8 +165,12 @@ async def broadcast_venue_state(venue_id: str):
 
 
 def trigger_venue_update(venue_id: str):
-    """Thread-safe trigger invoked by camera workers on crossing events."""
-    global main_loop
+    """Thread-safe trigger invoked by camera workers on crossing events with 0.75s debouncing."""
+    global main_loop, _last_broadcast_times
+    now = time.time()
+    if now - _last_broadcast_times.get(venue_id, 0) < 0.75:
+        return
+    _last_broadcast_times[venue_id] = now
     if main_loop and main_loop.is_running():
         try:
             asyncio.run_coroutine_threadsafe(broadcast_venue_state(venue_id), main_loop)

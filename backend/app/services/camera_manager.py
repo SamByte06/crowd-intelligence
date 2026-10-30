@@ -323,11 +323,16 @@ class CameraWorker:
                 except Exception as e:
                     logger.error(f"Detection error (gate {self.gate_id}): {e}")
 
-            # 3. Publish annotated frame to JPEG buffer at smooth ~25 FPS
-            if (now - last_encode_time >= 0.04) or should_detect:
+            # 3. Publish annotated frame to JPEG buffer at lightweight web-optimized resolution
+            if (now - last_encode_time >= 0.1):
                 try:
                     annotated = self._annotate_frame(frame, last_detections)
-                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 68])
+                    h, w = annotated.shape[:2]
+                    if w > 640:
+                        new_w = 640
+                        new_h = int(h * (640 / w))
+                        annotated = cv2.resize(annotated, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 48])
                     if success:
                         with self._frame_lock:
                             self._latest_jpeg = buf.tobytes()
