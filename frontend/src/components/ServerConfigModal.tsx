@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Server, Check, X, ExternalLink, RefreshCw } from 'lucide-react';
+import { Server, Check, X, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { getBackendBaseUrl, setBackendBaseUrl } from '../services/api';
 
 interface ServerConfigModalProps {
@@ -10,16 +10,55 @@ interface ServerConfigModalProps {
 
 export default function ServerConfigModal({ isOpen, onClose, connectionStatus }: ServerConfigModalProps) {
   const [url, setUrl] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setUrl(getBackendBaseUrl());
+      setTestResult(null);
       setSaved(false);
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    const targetUrl = url.trim().replace(/\/+$/, '');
+    const healthUrl = targetUrl ? `${targetUrl}/api/v1/health` : '/api/v1/health';
+
+    const startTime = Date.now();
+    try {
+      const res = await fetch(healthUrl, { method: 'GET', cache: 'no-store' });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error('Host responded with HTML instead of API JSON. Verify the tunnel points to port 8000.');
+      }
+      const data = await res.json();
+      const elapsed = Date.now() - startTime;
+      if (data && (data.status === 'ok' || data.status === 'healthy')) {
+        setTestResult({
+          ok: true,
+          message: `Connected successfully! (${elapsed}ms latency) - YOLO11 engine active.`,
+        });
+      } else {
+        setTestResult({
+          ok: true,
+          message: `Server reached (${elapsed}ms). Ready to stream.`,
+        });
+      }
+    } catch (err: any) {
+      setTestResult({
+        ok: false,
+        message: err.message || 'Could not connect. Ensure your host computer is running uvicorn and Cloudflare tunnel.',
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const handleSave = () => {
     setBackendBaseUrl(url);
@@ -27,7 +66,7 @@ export default function ServerConfigModal({ isOpen, onClose, connectionStatus }:
     setTimeout(() => {
       onClose();
       window.location.reload();
-    }, 600);
+    }, 500);
   };
 
   const handleReset = () => {
@@ -37,20 +76,20 @@ export default function ServerConfigModal({ isOpen, onClose, connectionStatus }:
     setTimeout(() => {
       onClose();
       window.location.reload();
-    }, 600);
+    }, 500);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-fadeIn">
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-              <Server className="h-4 w-4" />
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white shadow-xs">
+              <Server className="h-4.5 w-4.5" />
             </div>
             <div>
               <h3 className="text-sm font-bold text-slate-900">AI Host Server Connection</h3>
-              <p className="text-[11px] text-slate-500">Configure Cloudflare Tunnel or local server URL</p>
+              <p className="text-[11px] text-slate-500">Connect Vercel to your Cloudflare backend</p>
             </div>
           </div>
           <button
@@ -61,27 +100,57 @@ export default function ServerConfigModal({ isOpen, onClose, connectionStatus }:
           </button>
         </div>
 
-        <div className="my-4 space-y-3">
+        <div className="my-4 space-y-3.5">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Backend Cloudflare / Host URL
+            <label className="block text-xs font-bold text-slate-800 mb-1">
+              Cloudflare Tunnel URL
             </label>
-            <input
-              type="url"
-              placeholder="e.g. https://xxxx.trycloudflare.com"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
-            />
-            <p className="mt-1 text-[11px] text-slate-500">
-              Paste your active Cloudflare tunnel URL when frontend is hosted on Vercel. Leave blank if running on the same server.
+            <div className="flex gap-2">
+              <input
+                type="url"
+                placeholder="https://xxxx.trycloudflare.com"
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setTestResult(null);
+                }}
+                className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-hidden focus:ring-1 focus:ring-blue-500 shadow-2xs"
+              />
+              <button
+                type="button"
+                onClick={handleTestConnection}
+                disabled={testing}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 transition shrink-0"
+              >
+                {testing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'Test'}
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] text-slate-500 leading-tight">
+              Paste the URL generated by <code className="bg-slate-100 px-1 py-0.5 rounded text-slate-700 font-mono">cloudflared tunnel --url http://localhost:8000</code>.
             </p>
           </div>
 
+          {testResult && (
+            <div
+              className={`rounded-lg p-2.5 text-xs flex items-start gap-2 border ${
+                testResult.ok
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}
+            >
+              {testResult.ok ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              )}
+              <span className="leading-snug">{testResult.message}</span>
+            </div>
+          )}
+
           <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs flex items-center justify-between">
-            <span className="text-slate-600">Current Status:</span>
+            <span className="text-slate-600 font-medium">Current Status:</span>
             <span
-              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-bold text-[10px] ${
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold text-[10px] ${
                 connectionStatus === 'CONNECTED'
                   ? 'bg-emerald-100 text-emerald-800'
                   : 'bg-amber-100 text-amber-800'
@@ -92,27 +161,36 @@ export default function ServerConfigModal({ isOpen, onClose, connectionStatus }:
                   connectionStatus === 'CONNECTED' ? 'bg-emerald-500' : 'bg-amber-500'
                 }`}
               />
-              {connectionStatus === 'CONNECTED' ? 'CONNECTED' : 'STANDBY / OFFLINE'}
+              {connectionStatus === 'CONNECTED' ? 'CONNECTED' : 'STANDBY / SLEEPING'}
             </span>
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+        <div className="flex items-center justify-between border-t border-slate-100 pt-3">
           <button
             type="button"
             onClick={handleReset}
-            className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 hover:bg-slate-100"
           >
-            Reset (Same Host)
+            Clear URL
           </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-blue-700 transition shadow-xs"
-          >
-            {saved ? <Check className="h-3.5 w-3.5" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            <span>{saved ? 'Saved!' : 'Save & Connect'}</span>
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-blue-700 transition shadow-xs"
+            >
+              {saved ? <Check className="h-3.5 w-3.5" /> : null}
+              <span>{saved ? 'Saved!' : 'Save & Connect'}</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

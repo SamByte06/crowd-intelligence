@@ -27,10 +27,21 @@ export function getApiUrl(endpoint: string): string {
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const fullUrl = getApiUrl(url);
-  const res = await fetch(fullUrl, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-  });
+  let res: Response;
+  try {
+    res = await fetch(fullUrl, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...options?.headers },
+    });
+  } catch (netErr: any) {
+    throw new Error('Could not reach backend. Verify Cloudflare tunnel is running or check server connection.');
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('text/html')) {
+    throw new Error('Host AI Server is on standby. Click the STANDBY button to connect your Cloudflare tunnel.');
+  }
+
   if (!res.ok) {
     if (res.status === 502 || res.statusText === 'Bad Gateway') {
       throw new Error(
@@ -47,7 +58,13 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     throw new Error(message || `Request failed: ${res.status}`);
   }
   if (res.status === 204) return {} as T;
-  return res.json();
+
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error('Host AI Server is on standby. Click the STANDBY button to connect your Cloudflare tunnel.');
+  }
 }
 
 // --- Venues ---

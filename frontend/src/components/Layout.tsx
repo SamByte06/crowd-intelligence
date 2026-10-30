@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, SlidersHorizontal, Building2, ShieldCheck, RefreshCw, Calendar, Settings, Compass } from 'lucide-react'
+import { LayoutDashboard, SlidersHorizontal, Building2, ShieldCheck, RefreshCw, Calendar, Settings, Compass, Server } from 'lucide-react'
 import { monitorApi } from '../services/api'
+import ServerConfigModal from './ServerConfigModal'
 
 export default function Layout() {
   const location = useLocation()
   const [currentTime, setCurrentTime] = useState<string>('')
   const [systemStatus, setSystemStatus] = useState<'checking' | 'online' | 'standby'>('checking')
+  const [isServerModalOpen, setIsServerModalOpen] = useState(false)
 
   // Live formatted date and time
   useEffect(() => {
@@ -110,11 +112,12 @@ export default function Layout() {
 
           {/* Right Status Indicator & Live Date/Time */}
           <div className="flex shrink-0 items-center gap-3 sm:gap-4">
-            {/* Live System Status Indicator */}
-            <div
-              onClick={checkHealth}
-              title="Click to re-verify backend connectivity"
-              className="flex items-center gap-2 px-2.5 py-1 rounded-md border text-xs font-mono cursor-pointer transition-colors select-none"
+            {/* Live System Status Indicator (Click to open Server Connection Modal) */}
+            <button
+              type="button"
+              onClick={() => setIsServerModalOpen(true)}
+              title="Click to connect or view AI Host Server status"
+              className="flex items-center gap-2 px-2.5 py-1 rounded-md border text-xs font-mono cursor-pointer transition-colors select-none shadow-2xs hover:opacity-90"
               style={{
                 backgroundColor: systemStatus === 'online' ? '#f0fdf4' : '#fffbeb',
                 borderColor: systemStatus === 'online' ? '#bbf7d0' : '#fef08a',
@@ -134,10 +137,10 @@ export default function Layout() {
                 <>
                   <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
                   <span className="text-amber-800 font-semibold tracking-tight">STANDBY</span>
-                  <RefreshCw className="w-3 h-3 text-amber-600 ml-0.5" />
+                  <Server className="w-3 h-3 text-amber-600 ml-0.5" />
                 </>
               )}
-            </div>
+            </button>
 
             {/* Live Formatted Date & Time Display */}
             <div className="flex items-center gap-1.5 text-xs font-mono text-slate-600 tracking-tight rounded-md bg-slate-50 border border-slate-200 px-2.5 py-1 shadow-2xs">
@@ -146,6 +149,24 @@ export default function Layout() {
             </div>
           </div>
         </div>
+
+        {/* Global Host Standby Alert Banner */}
+        {systemStatus === 'standby' && (
+          <div className="bg-amber-50 border-t border-b border-amber-200 px-4 py-2 text-xs text-amber-900 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0 animate-pulse" />
+              <span>
+                <strong>AI Host Server is in Standby:</strong> Connect your Cloudflare Tunnel URL to stream real-time camera tracking and live gate analytics.
+              </span>
+            </div>
+            <button
+              onClick={() => setIsServerModalOpen(true)}
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-md font-bold text-xs transition shadow-xs cursor-pointer"
+            >
+              Connect Server URL
+            </button>
+          </div>
+        )}
 
         {/* Mobile Navigation Tabs */}
         <div className="flex items-center justify-around border-t border-slate-200 bg-white px-2 py-1.5 md:hidden">
@@ -182,6 +203,13 @@ export default function Layout() {
           </span>
         </div>
       </footer>
+
+      {/* Global AI Server Connection Modal */}
+      <ServerConfigModal
+        isOpen={isServerModalOpen}
+        onClose={() => setIsServerModalOpen(false)}
+        connectionStatus={systemStatus === 'online' ? 'CONNECTED' : 'STANDBY'}
+      />
     </div>
   )
 }
