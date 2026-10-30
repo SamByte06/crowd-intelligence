@@ -15,6 +15,7 @@ from pywebpush import webpush, WebPushException
 logger = logging.getLogger(__name__)
 
 VAPID_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "vapid_keys.json"
+VAPID_PEM_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "vapid_private.pem"
 SUBSCRIPTIONS_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "push_subscriptions.json"
 
 # In-memory subscription registry: venue_id -> list of subscriptions
@@ -61,6 +62,13 @@ def _ensure_vapid_keys():
         logger.info("Generated new persistent VAPID keys for Web Push")
     else:
         logger.info("Loaded persistent VAPID keys for Web Push")
+
+    # Persist PEM file on disk for pywebpush / Vapid.from_file compatibility
+    try:
+        with open(VAPID_PEM_FILE, "w", encoding="utf-8") as f_pem:
+            f_pem.write(_private_key)
+    except Exception as e_pem:
+        logger.warning(f"Could not write VAPID PEM file: {e_pem}")
 
     _vapid_claims = {
         "sub": "mailto:admin@crowd-intelligence.local"
@@ -128,9 +136,10 @@ def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WA
     """
     subscribers = _subscriptions.get(venue_id, [])
     if not subscribers:
-        logger.info(f"broadcast_web_push: no subscribers for venue {venue_id}")
+        logger.debug(f"broadcast_web_push: no subscribers for venue {venue_id}")
         return 0
 
+    is_timeline = (tag == "live-crowd-timeline")
     payload = json.dumps({
         "title": title,
         "options": {
@@ -138,9 +147,10 @@ def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WA
             "icon": "/favicon.svg",
             "badge": "/favicon.svg",
             "tag": tag,
-            "requireInteraction": True,
-            "renotify": True,
-            "vibrate": [400, 150, 400, 150, 400] if severity == "CRITICAL" else [300, 100, 300],
+            "requireInteraction": not is_timeline,
+            "renotify": not is_timeline,
+            "silent": is_timeline,
+            "vibrate": [] if is_timeline else ([400, 150, 400, 150, 400] if severity == "CRITICAL" else [300, 100, 300]),
             "data": {"url": f"/events/{venue_id}"},
         }
     })
@@ -154,7 +164,7 @@ def broadcast_web_push(venue_id: str, title: str, body: str, severity: str = "WA
             webpush(
                 subscription_info=sub,
                 data=payload,
-                vapid_private_key=_private_key,
+                vapid_private_key=str(VAPID_PEM_FILE),
                 vapid_claims=_vapid_claims,
                 ttl=300,
             )

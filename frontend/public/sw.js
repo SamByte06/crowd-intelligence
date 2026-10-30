@@ -23,13 +23,20 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  const title = data.title || '🚨 Live Crowd Alert';
+  const incomingOpts = data.options || {};
+  const isSilentTimeline = incomingOpts.tag === 'live-crowd-timeline' || incomingOpts.silent === true;
+
+  const title = data.title || (isSilentTimeline ? 'Live Crowd Timeline' : '🚨 Live Crowd Alert');
   const options = {
     icon: '/favicon.svg',
     badge: '/favicon.svg',
-    vibrate: [400, 150, 400, 150, 400],
-    requireInteraction: true,
-    ...data.options,
+    tag: incomingOpts.tag || 'crowd-alert',
+    renotify: incomingOpts.renotify !== undefined ? incomingOpts.renotify : !isSilentTimeline,
+    silent: incomingOpts.silent !== undefined ? incomingOpts.silent : isSilentTimeline,
+    requireInteraction: incomingOpts.requireInteraction !== undefined ? incomingOpts.requireInteraction : !isSilentTimeline,
+    vibrate: isSilentTimeline ? [] : (incomingOpts.vibrate || [400, 150, 400, 150, 400]),
+    data: incomingOpts.data || { url: '/' },
+    ...incomingOpts,
   };
 
   event.waitUntil(self.registration.showNotification(title, options));

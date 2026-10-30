@@ -205,10 +205,31 @@ def get_push_public_key():
 
 
 @router.post("/push/subscribe")
-def subscribe_push(payload: PushSubscriptionPayload):
-    """Register browser push subscription for a venue."""
-    from app.services.push_service import add_subscription
+def subscribe_push(payload: PushSubscriptionPayload, db: Session = Depends(get_db)):
+    """Register browser push subscription for a venue and send immediate confirmation timeline push."""
+    from app.services.push_service import add_subscription, broadcast_web_push
     add_subscription(payload.venue_id, payload.subscription)
+
+    # Immediately push current live timeline to newly subscribed device
+    try:
+        venue = db.query(Venue).filter(Venue.id == payload.venue_id).first()
+        if venue:
+            cap = venue.effective_capacity or 1000
+            count = venue.current_occupancy or 0
+            pct = round((count / cap) * 100, 1) if cap > 0 else 0
+            status_emoji = "🔴" if pct >= 90 else ("🟡" if pct >= 75 else "🟢")
+            status_word = "CRITICAL CAPACITY" if pct >= 90 else ("HIGH RUSH" if pct >= 75 else "SAFE FLOW")
+
+            broadcast_web_push(
+                venue_id=payload.venue_id,
+                title=f"{status_emoji} {status_word}: {venue.name}",
+                body=f"⏱️ Live Monitoring Active  |  👥 {pct}% ({count}/{cap})\n⚡ Alerts connected! You will receive updates even when on Instagram.",
+                severity="NORMAL",
+                tag="live-crowd-timeline",
+            )
+    except Exception as e_push:
+        pass
+
     return {"status": "subscribed"}
 
 

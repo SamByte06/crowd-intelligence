@@ -1,0 +1,12 @@
+{
+  "01190f8c-0a4f-4cde-8f75-6c120c229668": [
+    {
+      "endpoint": "https://fcm.googleapis.com/fcm/send/dMXvTDRmnqc:APA91bHGWo2I6oX3jg0OYB8mXoGRpzw1137U5-Unc71Ir47PdBjIG227yIAidkMlEW4d5vdTRmraRbgjgkokKvcdwuNrWdvpBygHokBcyu-BZer_j6gk2Ad-GvJiQBUc0Uganp5k4MD8",
+      "expirationTime": null,
+      "keys": {
+        "p256dh": "BH_bA7sG0orlQ0-lB2zePQxzuN4X0FJm_wfFt2fpYTfBjPVd_9yIkJXj8V_kRo9tIRaO1ewJFEQCdh1UUj8kXRo",
+        "auth": "NQi_DkGjX7XHx6Ky94lJpg"
+      }
+    }
+  ]
+}

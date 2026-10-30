@@ -123,30 +123,95 @@ async def lifespan(app: FastAPI):
     logger.info("Database initialized, camera manager ready")
 
     # Periodic background alert evaluator and server-side Web Push dispatcher
-    # Dispatches alerts straight into subscriber devices via Google FCM even if browser is closed
+    # Dispatches alerts & silent timeline straight into subscriber devices via Google FCM even if browser is closed / in Instagram
     async def alert_background_worker():
+        last_timeline_time = {}
+        last_percent_seen = {}
+        last_alert_level = {}
+        last_alert_time = {}
+
         while True:
             try:
                 await asyncio.sleep(4)
                 db = SessionLocal()
                 try:
                     from app.models.venue import Venue
-                    from app.services.alert_service import AlertService
                     from app.services.push_service import broadcast_web_push
+                    from app.services.forecast_service import ForecastService
 
                     venues = db.query(Venue).filter(Venue.is_active == True).all()
+                    now = time.time()
+
                     for v in venues:
-                        alerts = AlertService.evaluate(db, v.id)
-                        if alerts:
-                            for a in alerts:
-                                sev = a.severity.value if hasattr(a.severity, "value") else str(a.severity)
-                                broadcast_web_push(
-                                    venue_id=v.id,
-                                    title=f"{'🚨 CRITICAL ALERT' if sev == 'CRITICAL' else '⚠️ RUSH WARNING'} • {v.name}",
-                                    body=a.message,
-                                    severity=sev,
-                                    tag=f"crowd-alert-{sev.lower()}",
-                                )
+                        cap = v.effective_capacity or 1000
+                        count = v.current_occupancy or 0
+                        pct = round((count / cap) * 100, 1) if cap > 0 else 0
+
+                        # 1. Evaluate alert severity level
+                        crit_thresh = (v.critical_threshold * 100) if v.critical_threshold else 90.0
+                        warn_thresh = (v.warning_threshold * 100) if v.warning_threshold else 75.0
+
+                        if pct >= crit_thresh:
+                            level = "CRITICAL"
+                        elif pct >= warn_thresh:
+                            level = "WARNING"
+                        else:
+                            level = "NORMAL"
+
+                        prev_level = last_alert_level.get(v.id, "NORMAL")
+                        prev_alert_t = last_alert_time.get(v.id, 0)
+
+                        # Urgent Push on level escalation or reminder every 5 min if remaining critical/warning
+                        if level != "NORMAL" and (level != prev_level or (now - prev_alert_t >= 300)):
+                            last_alert_level[v.id] = level
+                            last_alert_time[v.id] = now
+                            if level == "CRITICAL":
+                                title = f"🚨 CRITICAL CROWD ALARM • {v.name}"
+                                body = f"Occupancy reached {pct}% ({count}/{cap})! High congestion detected at gates."
+                            else:
+                                title = f"⚠️ HIGH RUSH WARNING • {v.name}"
+                                body = f"Venue is now {pct}% full ({count}/{cap}). Entry queues are building up."
+
+                            broadcast_web_push(
+                                venue_id=v.id,
+                                title=title,
+                                body=body,
+                                severity=level,
+                                tag=f"crowd-alert-{level.lower()}",
+                            )
+                        elif level == "NORMAL" and prev_level != "NORMAL":
+                            last_alert_level[v.id] = "NORMAL"
+
+                        # 2. Silent Live Timeline Push (Flipkart / Zomato style) every 15s or on >= 1% change
+                        prev_time = last_timeline_time.get(v.id, 0)
+                        prev_pct = last_percent_seen.get(v.id, -1)
+                        if (now - prev_time >= 15) or (abs(pct - prev_pct) >= 1.0):
+                            last_timeline_time[v.id] = now
+                            last_percent_seen[v.id] = pct
+
+                            try:
+                                fc = ForecastService.forecast(db, v.id)
+                                time_to_cap = fc.get("time_to_critical_minutes")
+                                inflow = fc.get("net_inflow_rate", 0)
+                            except Exception:
+                                time_to_cap = None
+                                inflow = 0
+
+                            status_emoji = "🔴" if pct >= 90 else ("🟡" if pct >= 75 else "🟢")
+                            status_word = "CRITICAL CAPACITY" if pct >= 90 else ("HIGH RUSH" if pct >= 75 else "SAFE FLOW")
+                            time_text = f"Full in ~{round(time_to_cap)}m" if (time_to_cap and time_to_cap > 0) else ("Area FULL" if pct >= 100 else "Steady Flow")
+                            flow_text = f"+{inflow:.0f}/m" if inflow > 0 else f"{inflow:.0f}/m"
+
+                            title = f"{status_emoji} {status_word}: {v.name}"
+                            body = f"⏱️ {time_text}  |  👥 {pct}% ({count}/{cap})\n⚡ Speed: {flow_text}  |  [Safe 🟢 ──> Rush 🟡 ──> Full 🔴]"
+
+                            broadcast_web_push(
+                                venue_id=v.id,
+                                title=title,
+                                body=body,
+                                severity="NORMAL",
+                                tag="live-crowd-timeline",
+                            )
                 except Exception as e_loop:
                     logger.debug(f"Alert loop debug: {e_loop}")
                 finally:
