@@ -1,4 +1,5 @@
 // Notification service for system and push notifications
+import { getApiUrl } from './api'
 
 let keepAliveAudioCtx: AudioContext | null = null
 let keepAliveOsc: OscillatorNode | null = null
@@ -33,7 +34,7 @@ export async function subscribeToBackendWebPush(
     if (!reg) return false
 
     // Fetch VAPID public key from backend
-    const keyRes = await fetch('/api/v1/push/vapid-public-key')
+    const keyRes = await fetch(getApiUrl('/push/vapid-public-key'))
     if (!keyRes.ok) return false
     const { publicKey } = await keyRes.json()
     if (!publicKey) return false
@@ -59,7 +60,7 @@ export async function subscribeToBackendWebPush(
     }
 
     // Register subscription with backend
-    const regRes = await fetch('/api/v1/push/subscribe', {
+    const regRes = await fetch(getApiUrl('/push/subscribe'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -86,7 +87,7 @@ export async function toggleBackendNotificationPreference(
   const endpoint = localStorage.getItem(`push_endpoint_${venueId}`)
   if (!endpoint) return false
   try {
-    const res = await fetch('/api/v1/push/toggle', {
+    const res = await fetch(getApiUrl('/push/toggle'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -105,7 +106,7 @@ export async function toggleBackendNotificationPreference(
 // Send test push notification from backend
 export async function triggerBackendTestPush(venueId: string, delaySeconds: number = 0): Promise<boolean> {
   try {
-    const res = await fetch('/api/v1/push/test', {
+    const res = await fetch(getApiUrl('/push/test'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ venue_id: venueId, delay_seconds: delaySeconds }),

@@ -29,7 +29,8 @@ import {
   VideoOff,
   X,
 } from 'lucide-react'
-import { connectWebSocket, gateApi, monitorApi, venueApi } from '../services/api'
+import { connectWebSocket, gateApi, monitorApi, venueApi, getApiUrl, ConnectionStatus } from '../services/api'
+import ServerConfigModal from '../components/ServerConfigModal'
 import { useVideoStreams } from '../services/useVideoStream'
 import type { Alert, DashboardState, Gate, Venue } from '../types'
 
@@ -47,6 +48,8 @@ export default function Dashboard() {
   const [error, setError] = useState('')
   const [streamErrors, setStreamErrors] = useState<Record<string, boolean>>({})
   const [actionPending, setActionPending] = useState<string | null>(null)
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('RECONNECTING')
+  const [isServerModalOpen, setIsServerModalOpen] = useState(false)
   const [processPending, setProcessPending] = useState(false)
   const [fullscreenGate, setFullscreenGate] = useState<Gate | null>(null)
   const [gridMode, setGridMode] = useState<'large' | 'compact'>('large')
@@ -114,7 +117,7 @@ export default function Dashboard() {
     if (!venueId) return
     setTestPushSent(true)
     try {
-      await fetch('/api/v1/push/test', {
+      await fetch(getApiUrl('/push/test'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ venue_id: venueId, delay_seconds: 0 }),
@@ -318,20 +321,26 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!venueId) return
-    return connectWebSocket(venueId, (message) => {
-      if (message.type !== 'initial_state' && message.type !== 'update') return
-      const next = message.data as DashboardState
-      setState((previous) => ({ ...previous, ...next, gates: next.gates || previous?.gates || [] } as DashboardState))
-      if (Array.isArray(next.gates)) {
-        setGates((current) => next.gates.map((incoming) => ({
-          ...(current.find((gate) => gate.id === incoming.id) || {} as Gate),
-          ...incoming,
-        })))
+    return connectWebSocket(
+      venueId,
+      (message) => {
+        if (message.type !== 'initial_state' && message.type !== 'update') return
+        const next = message.data as DashboardState
+        setState((previous) => ({ ...previous, ...next, gates: next.gates || previous?.gates || [] } as DashboardState))
+        if (Array.isArray(next.gates)) {
+          setGates((current) => next.gates.map((incoming) => ({
+            ...(current.find((gate) => gate.id === incoming.id) || {} as Gate),
+            ...incoming,
+          })))
+        }
+        if (next.venue) {
+          setVenue((prev) => (prev ? { ...prev, ...next.venue } : next.venue!))
+        }
+      },
+      (status) => {
+        setConnectionStatus(status)
       }
-      if (next.venue) {
-        setVenue((prev) => (prev ? { ...prev, ...next.venue } : next.venue!))
-      }
-    })
+    )
   }, [venueId])
 
   const handleRestartGate = async (gateId: string) => {
@@ -564,6 +573,19 @@ export default function Dashboard() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Connection status button */}
+          <button
+            onClick={() => setIsServerModalOpen(true)}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition shadow-xs cursor-pointer ${
+              connectionStatus === 'CONNECTED'
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+            }`}
+            title="Configure Backend Server Connection"
+          >
+            <span className={`w-2 h-2 rounded-full ${connectionStatus === 'CONNECTED' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+            <span>{connectionStatus === 'CONNECTED' ? 'CONNECTED' : 'STANDBY'}</span>
+          </button>
           <button onClick={() => fetchData()} disabled={refreshing} className="btn-secondary text-xs">
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh
           </button>
@@ -591,6 +613,24 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* Offline / Standby Notice */}
+      {connectionStatus === 'OFFLINE' && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/95 px-4 py-3 text-xs text-amber-900 shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
+            <span>
+              <strong>Local AI Host Server on Standby:</strong> The host computer running the YOLO11 model is currently offline or sleeping. Live video feeds and AI inference will resume automatically once connected.
+            </span>
+          </div>
+          <button
+            onClick={() => setIsServerModalOpen(true)}
+            className="px-2.5 py-1 bg-amber-200 hover:bg-amber-300 rounded font-bold text-amber-950 text-[11px] shrink-0"
+          >
+            Server URL
+          </button>
+        </div>
+      )}
 
       {/* CRITICAL PROCESS CONTROL & CALIBRATION BANNER */}
       {!isCountingActive ? (
@@ -990,6 +1030,13 @@ export default function Dashboard() {
           )}
         </div>
       </section>
+
+      {/* Backend Server Configuration Modal */}
+      <ServerConfigModal
+        isOpen={isServerModalOpen}
+        onClose={() => setIsServerModalOpen(false)}
+        connectionStatus={connectionStatus}
+      />
     </div>
   )
 }
@@ -1071,7 +1118,7 @@ function CameraCard({
   }
 
   // Use multiplexed WebSocket blob URL if available; otherwise fallback to direct stream
-  const frameSrc = liveFrameUrl || `/api/v1/gates/${gate.id}/stream`
+  const frameSrc = liveFrameUrl || getApiUrl(`/gates/${gate.id}/stream`)
 
   return (
     <article className="group overflow-hidden rounded-xl border border-slate-200 bg-white p-3 shadow-xs transition hover:shadow-md flex flex-col justify-between">
@@ -1395,7 +1442,7 @@ function FullscreenStreamModal({
     setTimeout(() => setResetSuccess(false), 2500)
   }
 
-  const frameSrc = liveFrameUrl || `/api/v1/gates/${gate.id}/stream`
+  const frameSrc = liveFrameUrl || getApiUrl(`/gates/${gate.id}/stream`)
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white select-none overflow-hidden animate-fadeIn">

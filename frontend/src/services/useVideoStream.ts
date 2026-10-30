@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getBackendBaseUrl } from './api';
 
 /**
  * Hook to receive multiplexed live camera JPEG frames over a single WebSocket connection.
@@ -18,8 +19,15 @@ export function useVideoStreams(venueId: string | null) {
 
     const connect = () => {
       if (!active) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/streams/${venueId}`;
+      const base = getBackendBaseUrl();
+      let wsUrl: string;
+      if (base) {
+        const wsHost = base.replace(/^http:\/\//i, 'ws://').replace(/^https:\/\//i, 'wss://');
+        wsUrl = `${wsHost}/api/v1/ws/streams/${venueId}`;
+      } else {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsUrl = `${protocol}//${window.location.host}/api/v1/ws/streams/${venueId}`;
+      }
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
 

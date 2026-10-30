@@ -20,8 +20,10 @@ import {
   Layers,
   Smartphone,
   Laptop,
-  CheckCircle2
+  CheckCircle2,
+  Server
 } from 'lucide-react'
+import ServerConfigModal from '../components/ServerConfigModal'
 import { venueApi, gateApi, monitorApi, connectWebSocket, ConnectionStatus } from '../services/api'
 import {
   registerServiceWorker,
@@ -94,6 +96,7 @@ export default function EventFollowPage() {
   const [copiedLink, setCopiedLink] = useState(false)
   const [bgCountdown, setBgCountdown] = useState<number | null>(null)
   const [lastNotificationAlert, setLastNotificationAlert] = useState<string>('')
+  const [isServerModalOpen, setIsServerModalOpen] = useState(false)
 
   const lastStateRef = useRef<string>('')
 
@@ -555,14 +558,17 @@ export default function EventFollowPage() {
         <div className="rounded-xl bg-white border border-slate-200 px-4 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2.5">
             {/* Live Connection Status Badge */}
-            <div
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold border ${
+            <button
+              type="button"
+              onClick={() => setIsServerModalOpen(true)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold border transition hover:opacity-85 cursor-pointer ${
                 connectionStatus === 'CONNECTED'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : connectionStatus === 'RECONNECTING'
                   ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
                   : 'bg-rose-50 text-rose-700 border-rose-200'
               }`}
+              title="Click to check or configure Host Server connection"
             >
               <span
                 className={`w-2 h-2 rounded-full ${
@@ -573,8 +579,8 @@ export default function EventFollowPage() {
                     : 'bg-rose-500'
                 }`}
               />
-              <span>{connectionStatus === 'CONNECTED' ? 'CONNECTED' : connectionStatus === 'RECONNECTING' ? 'RECONNECTING' : 'OFFLINE'}</span>
-            </div>
+              <span>{connectionStatus === 'CONNECTED' ? 'CONNECTED' : connectionStatus === 'RECONNECTING' ? 'RECONNECTING' : 'HOST STANDBY'}</span>
+            </button>
 
             {/* Push Notifications Enabled / Disabled Badge */}
             <div
@@ -596,10 +602,36 @@ export default function EventFollowPage() {
           </div>
 
           <div className="flex items-center gap-3 text-slate-500 text-[11px]">
-            <span>Last Sync: {lastSyncTime.toLocaleTimeString()}</span>
+            <button
+              onClick={() => setIsServerModalOpen(true)}
+              className="inline-flex items-center gap-1 text-slate-500 hover:text-blue-600 transition"
+              title="Configure Backend URL"
+            >
+              <Server className="w-3 h-3" />
+              <span>Server</span>
+            </button>
+            <span>• Last Sync: {lastSyncTime.toLocaleTimeString()}</span>
             {lastNotificationTime && <span>• Last Alert: {lastNotificationTime}</span>}
           </div>
         </div>
+
+        {/* Offline / Standby Notice */}
+        {connectionStatus === 'OFFLINE' && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/90 p-4 text-xs text-amber-900 flex items-start justify-between gap-3 shadow-xs">
+            <div className="flex items-start gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-amber-500 mt-1 shrink-0" />
+              <div>
+                <strong>Local AI Host Server on Standby:</strong> The computer running the YOLO11 model &amp; CCTV camera pipeline is currently disconnected. Live metrics and video streaming will resume automatically once the host server is active.
+              </div>
+            </div>
+            <button
+              onClick={() => setIsServerModalOpen(true)}
+              className="px-2.5 py-1 bg-amber-200 hover:bg-amber-300 rounded font-bold text-amber-950 text-[11px] shrink-0 transition"
+            >
+              Server URL
+            </button>
+          </div>
+        )}
 
         {/* Event Hero Card */}
         <div className="rounded-xl bg-white border border-slate-200 p-6 sm:p-7 shadow-xs">
@@ -975,6 +1007,13 @@ export default function EventFollowPage() {
       <footer className="border-t border-slate-200 bg-white py-5 text-center text-xs text-slate-500">
         AI Crowd Intelligence • Real-time Safety &amp; Inflow Monitoring Platform
       </footer>
+
+      {/* Backend Host Server Config Modal */}
+      <ServerConfigModal
+        isOpen={isServerModalOpen}
+        onClose={() => setIsServerModalOpen(false)}
+        connectionStatus={connectionStatus}
+      />
     </div>
   )
 }

@@ -1,9 +1,33 @@
 /** API service for communicating with the backend. */
 
-const API_BASE = '/api/v1';
+export function getBackendBaseUrl(): string {
+  if (typeof window === 'undefined') return '';
+  const stored = localStorage.getItem('crowd_backend_url');
+  if (stored) return stored.trim().replace(/\/+$/, '');
+  const envUrl = (import.meta as any).env?.VITE_API_BASE_URL;
+  if (envUrl) return envUrl.trim().replace(/\/+$/, '');
+  return '';
+}
+
+export function setBackendBaseUrl(url: string): void {
+  if (typeof window === 'undefined') return;
+  const clean = url.trim().replace(/\/+$/, '');
+  if (!clean) {
+    localStorage.removeItem('crowd_backend_url');
+  } else {
+    localStorage.setItem('crowd_backend_url', clean);
+  }
+}
+
+export function getApiUrl(endpoint: string): string {
+  const base = getBackendBaseUrl();
+  const cleanEp = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  return `${base}/api/v1${cleanEp}`;
+}
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, {
+  const fullUrl = getApiUrl(url);
+  const res = await fetch(fullUrl, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...options?.headers },
   });
@@ -104,7 +128,7 @@ export const gateApi = {
         reject(new Error('Upload timed out after 3 minutes. Please check server or file size.'))
       }
 
-      xhr.open('POST', '/api/v1/gates/upload-video')
+      xhr.open('POST', getApiUrl('/gates/upload-video'))
       xhr.send(formData)
     })
   },
@@ -141,8 +165,15 @@ export function connectWebSocket(
   onMessage: (data: any) => void,
   onStatusChange?: (status: ConnectionStatus) => void
 ): () => void {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/dashboard/${venueId}`;
+  const base = getBackendBaseUrl();
+  let wsUrl: string;
+  if (base) {
+    const wsHost = base.replace(/^http:\/\//i, 'ws://').replace(/^https:\/\//i, 'wss://');
+    wsUrl = `${wsHost}/api/v1/ws/dashboard/${venueId}`;
+  } else {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    wsUrl = `${protocol}//${window.location.host}/api/v1/ws/dashboard/${venueId}`;
+  }
   let active = true;
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
