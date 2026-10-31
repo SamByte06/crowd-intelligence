@@ -367,10 +367,7 @@ def update_gate_line_config(gate_id: str, data: LineConfigUpdate, db: Session = 
     if data.counting_direction is not None:
         gate.counting_direction = data.counting_direction
 
-    db.commit()
-    db.refresh(gate)
-
-    # Immediately push to active camera worker thread if running
+    # Immediately push to active camera worker thread in-memory (< 1ms, before DB I/O)
     camera_manager.update_gate_line(
         gate_id=gate.id,
         start_x=gate.line_start_x,
@@ -386,6 +383,9 @@ def update_gate_line_config(gate_id: str, data: LineConfigUpdate, db: Session = 
             worker.gate_counter.registered_entered.clear()
             worker.gate_counter.registered_exited.clear()
             worker.gate_counter.blocked_violations.clear()
+
+    db.commit()
+    db.refresh(gate)
 
     return {
         "success": True,

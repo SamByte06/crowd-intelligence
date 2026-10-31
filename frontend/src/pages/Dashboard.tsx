@@ -1080,6 +1080,7 @@ function CameraCard({
   const [direction, setDirection] = useState(gate.counting_direction || 'any')
   const [isSaving, setIsSaving] = useState(false)
   const [resetSuccess, setResetSuccess] = useState(false)
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Sync state if props change from outside
   useEffect(() => {
@@ -1087,19 +1088,29 @@ function CameraCard({
     if (gate.counting_direction) setDirection(gate.counting_direction)
   }, [gate.line_start_y, gate.counting_direction])
 
-  const handleSliderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value) / 100
     setLineY(val)
-    setIsSaving(true)
-    await onUpdateLine(gate.id, val, direction)
-    setIsSaving(false)
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
+    debounceTimerRef.current = setTimeout(async () => {
+      setIsSaving(true)
+      try {
+        await onUpdateLine(gate.id, val, direction)
+      } finally {
+        setIsSaving(false)
+      }
+    }, 120)
   }
 
   const handleDirectLineSet = async (val: number) => {
     setLineY(val)
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
     setIsSaving(true)
-    await onUpdateLine(gate.id, val, direction)
-    setIsSaving(false)
+    try {
+      await onUpdateLine(gate.id, val, direction)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const handleDirectionChange = async (newDir: string) => {
@@ -1194,6 +1205,16 @@ function CameraCard({
                 className="h-full w-full object-cover transition duration-200"
                 onError={onError}
               />
+              {/* Instant 0ms Visual Baseline Overlay */}
+              <div
+                className="absolute left-0 right-0 pointer-events-none z-10 flex items-center transition-all duration-75"
+                style={{ top: `${lineY * 100}%` }}
+              >
+                <div className="w-full border-t-2 border-dashed border-amber-400 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
+                <span className="absolute right-2 -top-2.5 bg-amber-500 text-slate-950 font-black text-[9px] px-1 rounded shadow">
+                  {Math.round(lineY * 100)}%
+                </span>
+              </div>
               {/* Fullscreen Hover Hint */}
               <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/20 transition flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
                 <span className="flex items-center gap-1.5 rounded-full bg-slate-900/80 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-xs border border-white/10">
@@ -1395,6 +1416,7 @@ function FullscreenStreamModal({
   const [isSaving, setIsSaving] = useState(false)
   const [resetSuccess, setResetSuccess] = useState(false)
   const [isNativeFullscreen, setIsNativeFullscreen] = useState(false)
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1412,19 +1434,29 @@ function FullscreenStreamModal({
     }
   }
 
-  const handleSliderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value) / 100
     setLineY(val)
-    setIsSaving(true)
-    await onUpdateLine(gate.id, val, direction)
-    setIsSaving(false)
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
+    debounceTimerRef.current = setTimeout(async () => {
+      setIsSaving(true)
+      try {
+        await onUpdateLine(gate.id, val, direction)
+      } finally {
+        setIsSaving(false)
+      }
+    }, 120)
   }
 
   const handleDirectLineSet = async (val: number) => {
     setLineY(val)
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
     setIsSaving(true)
-    await onUpdateLine(gate.id, val, direction)
-    setIsSaving(false)
+    try {
+      await onUpdateLine(gate.id, val, direction)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const handleDirectionChange = async (newDir: string) => {
@@ -1520,6 +1552,17 @@ function FullscreenStreamModal({
               alt={`${gate.display_name} Fullscreen Stream`}
               className="max-h-full max-w-full object-contain"
             />
+
+            {/* Instant 0ms Visual Baseline Overlay */}
+            <div
+              className="absolute left-0 right-0 pointer-events-none z-10 flex items-center transition-all duration-75"
+              style={{ top: `${lineY * 100}%` }}
+            >
+              <div className="w-full border-t-2 border-dashed border-amber-400 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
+              <span className="absolute right-4 -top-3 bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded shadow">
+                {Math.round(lineY * 100)}%
+              </span>
+            </div>
 
             {/* Real-Time Rule Overlay Notice */}
             <div className="absolute top-4 left-4 flex flex-col gap-1.5 pointer-events-none">
