@@ -272,7 +272,7 @@ class CameraWorker:
             return False
 
     def _process_loop(self):
-        """Read frames, detect, track, count with smooth streaming and load management."""
+        """Read frames, detect, track, count — optimized for low-latency tunnel streaming."""
         frame_count = 0
         last_detections: list[dict] = []
         last_encode_time = 0.0
@@ -284,7 +284,6 @@ class CameraWorker:
 
             ret, frame = self._cap.read()
             if not ret:
-                # If it's a loopable source (local file or cached clip), loop continuously
                 if self._is_loopable():
                     self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     time.sleep(0.03)
@@ -296,18 +295,19 @@ class CameraWorker:
             self.last_frame_at = datetime.now(timezone.utc)
             frame_count += 1
 
-            # 1. Immediately publish the very first frame so the client receives video in <10ms
+            # 1. Publish first frame immediately
             if self._latest_jpeg is None:
                 try:
-                    annotated = self._annotate_frame(frame.copy(), [])
-                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+                    small = self._resize_for_stream(frame)
+                    annotated = self._annotate_frame_fast(small, [])
+                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 55])
                     if success:
                         with self._frame_lock:
                             self._latest_jpeg = buf.tobytes()
                 except Exception as e:
                     logger.debug(f"Initial frame publication: {e}")
 
-            # 2. Run detection on configured frame_skip interval
+            # 2. Run detection every frame_skip frames
             should_detect = (frame_count % self.frame_skip == 0)
             if should_detect and self.model is not None:
                 self.frames_processed += 1
@@ -315,24 +315,18 @@ class CameraWorker:
                     detections = self._detect_and_track(frame)
                     last_detections = detections
                     events = self.gate_counter.update(detections)
-
                     for event in events:
                         self.last_count_at = datetime.now(timezone.utc)
                         self.on_crossing(self.venue_id, self.gate_id, event)
-
                 except Exception as e:
                     logger.error(f"Detection error (gate {self.gate_id}): {e}")
 
-            # 3. Publish annotated frame to JPEG buffer at lightweight web-optimized resolution
-            if (now - last_encode_time >= 0.1):
+            # 3. Encode stream JPEG at 5 FPS max (every 200ms)
+            if (now - last_encode_time >= 0.2):
                 try:
-                    annotated = self._annotate_frame(frame, last_detections)
-                    h, w = annotated.shape[:2]
-                    if w > 640:
-                        new_w = 640
-                        new_h = int(h * (640 / w))
-                        annotated = cv2.resize(annotated, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 48])
+                    small = self._resize_for_stream(frame)
+                    annotated = self._annotate_frame_fast(small, last_detections)
+                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 45])
                     if success:
                         with self._frame_lock:
                             self._latest_jpeg = buf.tobytes()
@@ -340,8 +334,58 @@ class CameraWorker:
                 except Exception as e:
                     logger.debug(f"Frame encoding error: {e}")
 
-            # Small sleep to prevent CPU spinning
-            time.sleep(0.01)
+            time.sleep(0.02)
+
+    def _resize_for_stream(self, frame: np.ndarray) -> np.ndarray:
+        """Downscale frame to max 480px width for lightweight tunnel streaming."""
+        h, w = frame.shape[:2]
+        if w > 480:
+            scale = 480 / w
+            return cv2.resize(frame, (480, int(h * scale)), interpolation=cv2.INTER_AREA)
+        return frame
+
+    def _annotate_frame_fast(self, frame: np.ndarray, detections: list[dict]) -> np.ndarray:
+        """Lightweight annotation — baseline + head dots + count badge only. No heavy text overlays."""
+        h, w = frame.shape[:2]
+        cfg = self.gate_counter.config
+        is_entry = (str(cfg.gate_type).upper().endswith("ENTRY") or cfg.gate_type == "ENTRY")
+        is_counting = getattr(self.gate_counter, "counting_enabled", True)
+
+        # Counting baseline
+        lx1, ly1 = int(cfg.start_x * w), int(cfg.start_y * h)
+        lx2, ly2 = int(cfg.end_x * w), int(cfg.end_y * h)
+
+        line_color = (50, 220, 80) if is_entry else (60, 60, 240)
+        if not is_counting:
+            line_color = (0, 200, 255)
+        cv2.line(frame, (lx1, ly1), (lx2, ly2), (15, 23, 42), 4)
+        cv2.line(frame, (lx1, ly1), (lx2, ly2), line_color, 2)
+
+        # Head detection dots
+        for det in detections:
+            hx = int(det.get("head_x", 0.0) * w)
+            hy = int(det.get("head_y", 0.0) * h)
+            status = det.get("status", "")
+            if status == "ENTRY EVENT":
+                color = (50, 240, 80)
+            elif status == "EXIT EVENT":
+                color = (255, 120, 40)
+            else:
+                color = (220, 220, 220)
+            cv2.circle(frame, (hx, hy), 4, color, -1, cv2.LINE_AA)
+            cv2.circle(frame, (hx, hy), 6, color, 1, cv2.LINE_AA)
+
+        # Bottom count badge
+        if is_counting:
+            count_text = f"IN: {self.gate_counter.total_in}" if is_entry else f"OUT: {self.gate_counter.total_out}"
+            badge_bg = (40, 180, 70) if is_entry else (50, 50, 220)
+        else:
+            count_text = "STANDBY"
+            badge_bg = (30, 140, 220)
+        cv2.rectangle(frame, (4, h - 22), (90, h - 2), badge_bg, -1)
+        cv2.putText(frame, count_text, (8, h - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+        return frame
 
     def _annotate_frame(self, frame: np.ndarray, detections: list[dict]) -> np.ndarray:
         """Annotate frame with high-visibility counting baseline, directional regions, pedestrian tracking, and debug HUD."""

@@ -263,7 +263,7 @@ def start_gate(gate_id: str, db: Session = Depends(get_db)):
         camera_source=source,
         line_config=line_config,
         confidence=gate.confidence_threshold,
-        frame_skip=gate.frame_skip,
+        frame_skip=gate.frame_skip or 3,
         gate_name=gate.display_name,
         counting_enabled=True,
     )
@@ -322,7 +322,7 @@ async def get_gate_stream(gate_id: str):
             real_frame = camera_manager.get_latest_frame(gate_id)
             if real_frame is not None:
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + real_frame + b"\r\n")
-                await asyncio.sleep(0.04)
+                await asyncio.sleep(0.2)
             else:
                 if standby_bytes:
                     yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + standby_bytes + b"\r\n")

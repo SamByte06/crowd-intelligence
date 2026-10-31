@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     )
     YOLO_CONFIDENCE: float = 0.25
     YOLO_IOU_THRESHOLD: float = 0.45
-    YOLO_IMAGE_SIZE: int = 640
+    YOLO_IMAGE_SIZE: int = 320
     YOLO_DEVICE: str = "auto"  # "auto", "cpu", "cuda", "0"
 
     # Tracker

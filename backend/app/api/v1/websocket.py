@@ -45,7 +45,7 @@ async def dashboard_ws(websocket: WebSocket, venue_id: str):
             await websocket.send_json({"type": "initial_state", "data": state})
 
         while True:
-            await asyncio.sleep(4.0)
+            await asyncio.sleep(8.0)
             cur_state = _get_venue_state(venue_id)
             if cur_state:
                 await websocket.send_json({"type": "update", "data": cur_state})
@@ -107,7 +107,7 @@ def ensure_venue_gates_running(venue_id: str):
                     camera_source=source,
                     line_config=line_cfg,
                     confidence=g.confidence_threshold or 0.25,
-                    frame_skip=g.frame_skip or 2,
+                    frame_skip=g.frame_skip or 3,
                     gate_name=g.display_name,
                     counting_enabled=True,
                 )
@@ -140,7 +140,7 @@ async def video_streams_ws(websocket: WebSocket, venue_id: str):
                             # 36-byte ASCII header padded with spaces + JPEG payload
                             header = gate_id.encode("ascii")[:36].ljust(36, b" ")
                             await websocket.send_bytes(header + jpeg)
-            await asyncio.sleep(0.12)
+            await asyncio.sleep(0.2)
     except WebSocketDisconnect:
         logger.info(f"Video streams multiplexer disconnected for venue {venue_id}")
     except Exception as e:
