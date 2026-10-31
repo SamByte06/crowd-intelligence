@@ -440,15 +440,15 @@ def pick_local_file():
     """
     import subprocess
     cmd = [
-        "powershell", "-NoProfile", "-Command",
+        "powershell", "-NoProfile", "-STA", "-Command",
         "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; "
         "$f = New-Object System.Windows.Forms.OpenFileDialog; "
         "$f.Title = 'Select Video File (Instant 0s Direct Link)'; "
         "$f.Filter = 'Video Files (*.mp4;*.avi;*.mov;*.mkv;*.webm)|*.mp4;*.avi;*.mov;*.mkv;*.webm|All Files (*.*)|*.*'; "
-        "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.FileName }"
+        "$top = New-Object System.Windows.Forms.Form; $top.TopMost = $true; if ($f.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.FileName }; $top.Dispose()"
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
         selected = proc.stdout.strip()
         if not selected or not os.path.exists(selected):
             return {"cancelled": True}
