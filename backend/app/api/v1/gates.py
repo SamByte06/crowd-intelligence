@@ -452,7 +452,7 @@ def pick_local_file():
         selected = proc.stdout.strip()
         if not selected or not os.path.exists(selected):
             return {"cancelled": True}
-        norm_path = os.path.abspath(selected).replace("\", "/")
+        norm_path = os.path.abspath(selected).replace("\\", "/")
         return {
             "success": True,
             "file_path": norm_path,
