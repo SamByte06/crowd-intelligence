@@ -1,7 +1,8 @@
 """
 AI Crowd Intelligence — All-in-One Live Launcher.
 Starts the FastAPI backend and Cloudflare Tunnel together in a single process.
-Automatically extracts the public trycloudflare.com URL and copies it to clipboard.
+Automatically extracts the public trycloudflare.com URL, copies the 1-click link to clipboard,
+and opens it in your default browser.
 """
 
 import sys
@@ -11,6 +12,7 @@ import time
 import signal
 import threading
 import subprocess
+import webbrowser
 
 # Ensure backend folder is in Python path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -108,21 +110,27 @@ def main():
         print("[WARNING] Tunnel started but URL could not be auto-detected within 20s.")
         print("Listening for stream logs...")
     else:
-        copy_success = copy_to_clipboard(tunnel_url)
+        one_click_url = f"https://understandthecrowd.vercel.app/inputs?api={tunnel_url}"
+        copy_success = copy_to_clipboard(one_click_url)
         print("\n" + "=" * 72)
-        print("   >>> YOUR LIVE BACKEND IS READY & ONLINE! <<<")
+        print("   >>> YOUR LIVE SYSTEM IS ONLINE & CONNECTED! <<<")
         print("=" * 72)
-        print(f"\n  [+] Public URL:   {tunnel_url}")
+        print(f"\n  [+] Backend Tunnel: {tunnel_url}")
+        print(f"  [+] 1-Click Link:   {one_click_url}")
         if copy_success:
-            print("  [+] Clipboard:    URL COPIED TO CLIPBOARD AUTOMATICALLY!")
-        print("\n  [NEXT STEPS]")
-        print("  1. Open your frontend: https://understandthecrowd.vercel.app")
-        print("  2. Click the 'STANDBY' button in the top-right header.")
-        print(f"  3. Paste ({tunnel_url}) and click 'Test & Save Connection'.")
-        print("  4. Your Vercel frontend is now live with real-time AI crowd vision!")
+            print("  [+] Clipboard:      1-CLICK LINK COPIED TO CLIPBOARD!")
+        print("\n  [INSTRUCTIONS]")
+        print("  Opening your browser now... If it doesn't open, click or paste:")
+        print(f"  --> {one_click_url}")
+        print("\n  (The link automatically connects the backend — no manual setup needed!)")
         print("\n" + "=" * 72)
-        print("  Keep this window open while testing. Press Ctrl + C to stop.")
+        print("  Keep this terminal open while testing. Press Ctrl + C to stop.")
         print("=" * 72 + "\n")
+
+        try:
+            webbrowser.open(one_click_url)
+        except Exception:
+            pass
 
     # Keep piping logs or stay alive until interrupted
     try:
