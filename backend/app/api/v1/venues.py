@@ -133,7 +133,7 @@ def quick_setup(data: QuickSetupRequest, db: Session = Depends(get_db)):
         baseline_established=True,
         baseline_established_at=datetime.now(timezone.utc),
         baseline_established_by="Operator",
-        monitoring_active=True,
+        is_active=True,
     )
     db.add(venue)
     db.flush()
