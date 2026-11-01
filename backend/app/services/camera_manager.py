@@ -307,9 +307,12 @@ class CameraWorker:
             # 1. Publish first frame immediately
             if self._latest_jpeg is None:
                 try:
-                    small = self._resize_for_stream(frame)
-                    annotated = self._annotate_frame_fast(small, [])
-                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 55])
+                    annotated = self._annotate_frame(frame.copy(), [])
+                    h, w = annotated.shape[:2]
+                    if w > 640:
+                        scale = 640 / w
+                        annotated = cv2.resize(annotated, (640, int(h * scale)), interpolation=cv2.INTER_AREA)
+                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
                     if success:
                         with self._frame_lock:
                             self._latest_jpeg = buf.tobytes()
@@ -330,12 +333,15 @@ class CameraWorker:
                 except Exception as e:
                     logger.error(f"Detection error (gate {self.gate_id}): {e}")
 
-            # 3. Encode stream JPEG at 5 FPS max (every 200ms)
+            # 3. Publish high-accuracy annotated frame with head circles & H-ID pills
             if (now - last_encode_time >= 0.1):
                 try:
-                    small = self._resize_for_stream(frame)
-                    annotated = self._annotate_frame_fast(small, last_detections)
-                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 45])
+                    annotated = self._annotate_frame(frame.copy(), last_detections)
+                    h, w = annotated.shape[:2]
+                    if w > 640:
+                        scale = 640 / w
+                        annotated = cv2.resize(annotated, (640, int(h * scale)), interpolation=cv2.INTER_AREA)
+                    success, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
                     if success:
                         with self._frame_lock:
                             self._latest_jpeg = buf.tobytes()
@@ -610,18 +616,29 @@ class CameraWorker:
                     head_x = ((x1 + x2) / 2.0) / w
                     head_y = ((y1 + y2) / 2.0) / h
 
+                    if is_head_model:
+                        head_x = ((x1 + x2) / 2.0) / w
+                        head_y = ((y1 + y2) / 2.0) / h
+                        head_bbox = [x1, y1, x2, y2]
+                    else:
+                        # Full-body detector fallback: head is in the top 20%
+                        box_h = y2 - y1
+                        head_x = ((x1 + x2) / 2.0) / w
+                        head_y = (y1 + box_h * 0.15) / h
+                        head_bbox = [x1 + (x2 - x1) * 0.2, y1, x2 - (x2 - x1) * 0.2, y1 + box_h * 0.28]
+
                     detections.append({
                         "track_id": track_id,
                         "head_x": head_x,
                         "head_y": head_y,
-                        "person_x": head_x,  # for gate counter compatibility
-                        "person_y": head_y,  # for gate counter compatibility
+                        "person_x": head_x,
+                        "person_y": head_y,
                         "cx": head_x,
                         "cy": head_y,
                         "feet_y": head_y,
                         "top_y": y1 / h,
                         "confidence": conf,
-                        "bbox": [x1, y1, x2, y2],
+                        "bbox": head_bbox,
                     })
 
         return detections
@@ -700,7 +717,7 @@ class CameraManager:
     def _resolve_model_path() -> str:
         from pathlib import Path
         service_dir = Path(__file__).resolve().parent
-        cand_names = ["yolo11s.pt", "11s-head.pt", "11n-head.pt"]
+        cand_names = ["11s-head.pt", "11n-head.pt", "yolo11s.pt"]
         cand_dirs = [
             service_dir.parent.parent,
             service_dir.parent.parent.parent / "fastreid",

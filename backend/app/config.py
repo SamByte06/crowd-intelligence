@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # YOLO Detection — pinned to backend directory to prevent relative path lookup failures
     YOLO_MODEL_PATH: str = Field(
-        default=str(Path(__file__).resolve().parent.parent / "yolo11s.pt"),
+        default=str(Path(__file__).resolve().parent.parent / "11s-head.pt"),
         description="Path to YOLO model weights file"
     )
     HEAD_MODEL_PATH: str = Field(
@@ -41,9 +41,9 @@ class Settings(BaseSettings):
         default=True,
         description="Enable dedicated head-based detection and persistent tracking"
     )
-    YOLO_CONFIDENCE: float = 0.25
+    YOLO_CONFIDENCE: float = 0.15
     YOLO_IOU_THRESHOLD: float = 0.45
-    YOLO_IMAGE_SIZE: int = 320
+    YOLO_IMAGE_SIZE: int = 640
     YOLO_DEVICE: str = "auto"  # "auto", "cpu", "cuda", "0"
 
     # Tracker
