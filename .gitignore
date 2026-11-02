@@ -70,3 +70,4 @@ backend/.cache/
 backend/.pytest_cache/
 media_cache/
 backend/media_cache/
+backend/static/

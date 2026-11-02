@@ -13,6 +13,11 @@ export function getBackendBaseUrl(): string {
     }
   } catch {}
 
+  // When running directly on localhost / 127.0.0.1 without query override, use local backend directly
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return window.location.port === '8000' ? '' : `http://${window.location.hostname}:8000`;
+  }
+
   const stored = localStorage.getItem('crowd_backend_url');
 
   if (stored) return stored.trim().replace(/\/+$/, '');
