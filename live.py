@@ -107,39 +107,49 @@ def main():
         sys.exit(1)
 
     tunnel_url = None
+    tunnel_registered = False
     url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
 
-    # Read output to capture the public URL
-    start_time = time.time()
-    while time.time() - start_time < 20:
-        line = cf_process.stdout.readline()
-        if not line:
-            if cf_process.poll() is not None:
+    # Continuously drain cloudflared output in a daemon thread to prevent pipe deadlocks on Windows
+    def monitor_cloudflared_logs():
+        nonlocal tunnel_url, tunnel_registered
+        for line in iter(cf_process.stdout.readline, ""):
+            if not line:
                 break
-            continue
+            if not tunnel_url:
+                m = url_pattern.search(line)
+                if m:
+                    tunnel_url = m.group(0)
+            if "Registered tunnel connection" in line:
+                tunnel_registered = True
 
-        match = url_pattern.search(line)
-        if match:
-            tunnel_url = match.group(0)
+    log_thread = threading.Thread(target=monitor_cloudflared_logs, daemon=True)
+    log_thread.start()
+
+    # Wait for URL and edge connection registration
+    start_time = time.time()
+    while time.time() - start_time < 25:
+        if tunnel_url and tunnel_registered:
             break
+        time.sleep(0.3)
 
     if not tunnel_url:
-        print("[WARNING] Tunnel started but URL could not be auto-detected within 20s.")
+        print("[WARNING] Tunnel started but URL could not be auto-detected within 25s.")
         vercel_url = "https://understandthecrowd.vercel.app/inputs"
     else:
         vercel_url = f"https://understandthecrowd.vercel.app/inputs?api={tunnel_url}"
         print(f"\n[3/3] Connected to Cloudflare Tunnel: {tunnel_url}")
-        print("Verifying tunnel connectivity with Cloudflare edge...")
+        print("Waiting for edge route confirmation...")
         import urllib.request
-        for _ in range(12):
+        for attempt in range(1, 10):
             try:
                 req = urllib.request.Request(
                     f"{tunnel_url}/api/v1/health",
-                    headers={"User-Agent": "Mozilla/5.0"}
+                    headers={"User-Agent": "Mozilla/5.0", "Origin": "https://understandthecrowd.vercel.app"},
                 )
-                with urllib.request.urlopen(req, timeout=3) as resp:
+                with urllib.request.urlopen(req, timeout=4) as resp:
                     if resp.status == 200:
-                        print("[SUCCESS] Cloudflare Tunnel is LIVE and responding!")
+                        print("[SUCCESS] Cloudflare Global Edge is ACTIVE & responding with HTTP 200!")
                         break
             except Exception:
                 time.sleep(1)
