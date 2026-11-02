@@ -533,6 +533,14 @@ export default function EventFollowPage() {
 
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setIsServerModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 text-xs font-semibold text-amber-900 transition-colors cursor-pointer"
+              title="Connect AI Host Server URL"
+            >
+              <Server className="w-3.5 h-3.5 text-amber-700" />
+              <span>Connect Server URL</span>
+            </button>
+            <button
               onClick={handleCopyLink}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-xs font-medium text-slate-700 transition-colors"
               title="Share Event Link"
@@ -616,7 +624,7 @@ export default function EventFollowPage() {
         </div>
 
         {/* Offline / Standby Notice */}
-        {connectionStatus === 'OFFLINE' && (
+        {connectionStatus !== 'CONNECTED' && (
           <div className="rounded-xl border border-amber-200 bg-amber-50/90 p-4 text-xs text-amber-900 flex items-start justify-between gap-3 shadow-xs">
             <div className="flex items-start gap-2.5">
               <span className="w-2 h-2 rounded-full bg-amber-500 mt-1 shrink-0" />
@@ -626,9 +634,9 @@ export default function EventFollowPage() {
             </div>
             <button
               onClick={() => setIsServerModalOpen(true)}
-              className="px-2.5 py-1 bg-amber-200 hover:bg-amber-300 rounded font-bold text-amber-950 text-[11px] shrink-0 transition"
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold text-xs shrink-0 transition cursor-pointer"
             >
-              Server URL
+              Connect Server URL
             </button>
           </div>
         )}
