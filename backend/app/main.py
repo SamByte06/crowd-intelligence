@@ -298,7 +298,7 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
-    alert_task = asyncio.create_task(alert_background_worker()) if not is_testing else None
+    alert_task = asyncio.create_task(alert_background_worker())
 
     yield
 
