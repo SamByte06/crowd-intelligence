@@ -33,11 +33,23 @@ def copy_to_clipboard(text: str):
     except Exception:
         return False
 
+def free_port_8000():
+    """Ensure port 8000 is completely free so uvicorn binds cleanly."""
+    try:
+        cmd = "powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }\""
+        subprocess.run(cmd, shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
+    except Exception:
+        pass
+
 def main():
     print("=" * 72)
     print("   AI CROWD INTELLIGENCE — ALL-IN-ONE LIVE LAUNCHER")
     print("=" * 72)
     print("\n[1/3] Initializing FastAPI Backend (Port 8000)...")
+
+    # Clean any zombie processes holding port 8000
+    free_port_8000()
 
     import uvicorn
     from app.main import app
@@ -55,10 +67,15 @@ def main():
     server_thread.start()
 
     # Wait for server to bind
-    for _ in range(30):
+    for _ in range(50):
         if server.started:
             break
         time.sleep(0.1)
+
+    if not server.started:
+        print("[ERROR] FastAPI backend failed to bind port 8000!")
+        print("Please check if another application is using port 8000.")
+        sys.exit(1)
 
     print("[SUCCESS] Backend Server is ONLINE at http://127.0.0.1:8000")
     print("\n[2/3] Connecting to Cloudflare Global Tunnel Network...")
@@ -112,8 +129,20 @@ def main():
     else:
         vercel_url = f"https://understandthecrowd.vercel.app/inputs?api={tunnel_url}"
         print(f"\n[3/3] Connected to Cloudflare Tunnel: {tunnel_url}")
-        print("Syncing with Cloudflare edge network...")
-        time.sleep(3)
+        print("Verifying tunnel connectivity with Cloudflare edge...")
+        import urllib.request
+        for _ in range(12):
+            try:
+                req = urllib.request.Request(
+                    f"{tunnel_url}/api/v1/health",
+                    headers={"User-Agent": "Mozilla/5.0"}
+                )
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    if resp.status == 200:
+                        print("[SUCCESS] Cloudflare Tunnel is LIVE and responding!")
+                        break
+            except Exception:
+                time.sleep(1)
 
     copy_to_clipboard(vercel_url)
 
