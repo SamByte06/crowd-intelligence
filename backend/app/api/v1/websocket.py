@@ -5,6 +5,7 @@ WebSocket endpoint for real-time dashboard updates.
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Set, Optional
 

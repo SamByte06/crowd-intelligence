@@ -17,20 +17,76 @@
       }
     },
     {
-      "endpoint": "https://fcm.googleapis.com/fcm/send/fF4e8HqELYY:APA91bFFiHHM0Irml5Ak7FX2BJ1hTY_wBR3-a85_6xoqFDAJkcUWqY-NRHAaArDi3u-FQ6I5seHB1iOhHfq_LN6uFUjxAo49t5eOpT8KvuNns7e-OySox9I320WXg7ola_Gt60eepEyY",
-      "expirationTime": null,
-      "keys": {
-        "p256dh": "BGfmhwEmXdTn-vtWo1KGow6_WXwJDO8YP0OlpPKIQyLWoh2Pr843zkfxU7_LNE7PSkbaMeQtZvNDndcudmDDaBg",
-        "auth": "OyZw4ZEj6Jwme8Oxa6I72g"
-      }
-    },
-    {
       "endpoint": "https://fcm.googleapis.com/fcm/send/dUd1-beicq4:APA91bE3JXpWe7thwGDOzgO6MdJWZSbGY8_BLdz3j3A9B5o1jEcaOYsg5zzD5upXqcY5qAvvqjkPjUhgJie8omVmq81gLgzAlUIh4USjbmbjnRza60T4TkhOBx16VOT-ey_IrfZvErOF",
       "expirationTime": null,
       "keys": {
         "p256dh": "BENGKU7S-n8qKV-FzLQ0XCLV_GS30M5gwqFgZoDS1NsB9pWoG4hMmRTsqEhrkFtnzA7h4cuUCf5bBBeUES5vlNU",
         "auth": "Lx23kKL2R0V25KOcFeyIUw"
       }
+    },
+    {
+      "endpoint": "https://fcm.googleapis.com/fcm/send/csDqtbPS5ZE:APA91bH4yXPHPCnbz_b7bTy96QW9wL3ZlkO-sQYRef97dno3BhyIqN8jmHiZzHcasmcJ6MzMbWgBwhecJmCSA1RLC_mGaHiu1mCXxwwLAjl6s5gg4QXoVuljK4JFGGRZvzox-oLd3jhZ",
+      "expirationTime": null,
+      "keys": {
+        "p256dh": "BIZmsN72eoY3onAj7Dcgf04YY04sF4ZkkXWdEA9lU6PqWebA_5L40cQwrvlXTJZswTps5F6bo5S7NWb4n0hc0zs",
+        "auth": "GH9xRuNaseUxnm-9zuTnOg"
+      },
+      "is_following": true,
+      "notifications_enabled": true,
+      "user_identifier": null,
+      "updated_at": "2026-10-30T07:24:37.734582+00:00"
+    },
+    {
+      "endpoint": "https://fcm.googleapis.com/fcm/send/d7Fp14qjYno:APA91bFmzisF2YLF624ESNsEUIDnKxLsLCuW8pi09BD1_raFGSfxn42vFxSJUeRwD96duKvamxSgenh1pU4ONJSd-W_Sk7TNwjUkbtUhlPHsjuFJmf_OH1RGyw0dJlGKxZx0TedQgYnI",
+      "expirationTime": null,
+      "keys": {
+        "p256dh": "BF0O8cyxeCT014eRwW0KS8WsDPwXRbrnnNbjJWyoz57ppgyu0s-6MokVfXlG-3YyXkVCvQUfGX4vhsVOQsUkMsM",
+        "auth": "EKxZxNgTIjTUTrd6t33D1w"
+      },
+      "is_following": true,
+      "notifications_enabled": true,
+      "user_identifier": null,
+      "updated_at": "2026-10-30T07:24:38.704957+00:00"
+    }
+  ],
+  "6c8bfc0d-eb06-4705-9b15-569e4c913f8e": [
+    {
+      "endpoint": "https://fcm.googleapis.com/fcm/send/e5jVnDLjfHY:APA91bHNjUNgkJhlPDU3D4jE14p7Nj1e-kYq0P_yPOg1LfivfYtA0RCfzoEZyL4eOQ338SO8pqxjvhb2XgfznRiOyTS0129QcLjUqI98-9KRx8bMO5FZlL7WCQ5wEGS-B2haPg-Dxbfg",
+      "expirationTime": null,
+      "keys": {
+        "p256dh": "BHCnYH3nH0L7zfc1mGdIpGgiMy24RW1r7zsKXZsO5wxTa5WOB87izBZNVm7JTZ5XKPw_VMkgm2N8vH_PX70jUMQ",
+        "auth": "_eWyRhK8DGJG5HVf6BKxtw"
+      },
+      "is_following": true,
+      "notifications_enabled": true,
+      "user_identifier": null,
+      "updated_at": "2026-10-31T06:43:34.953185+00:00"
+    }
+  ],
+  "ee88e0e0-de47-4625-9bf3-0a0ad250a2f8": [
+    {
+      "endpoint": "https://fcm.googleapis.com/fcm/send/dgC0v2XBv_g:APA91bEgEKlc5FHMDoiHKTunYlkVtkAVLkrXwvsxRtEcOAk5aDK1GYa-7SUVD5YnxTfOb1HkjQEqRjKlrtMiK0nA0GZYLU8lcw_4l2nhMZjJiM2ttwcCyinFuYHiY2M9PcNPcv-4u-ds",
+      "expirationTime": null,
+      "keys": {
+        "p256dh": "BL0uCzBS3paX2jrKQT5NMXh34ITptESUULbJ-tii6IDo-GIc84aUGXZPG_YbHtKerp-uMwcf-MnbSwMoIkbopwY",
+        "auth": "Y0RBQGm94E5RevvTgadqMQ"
+      },
+      "is_following": true,
+      "notifications_enabled": false,
+      "user_identifier": null,
+      "updated_at": "2026-10-31T08:29:53.873022+00:00"
+    },
+    {
+      "endpoint": "https://fcm.googleapis.com/fcm/send/cFK3nMzFQ0s:APA91bEaQsyzHMIg9yiRl1LY5GZHmn4Cyx4lN5O1RSZ-MZiJw0n_Q9QqsWLdxTg71ordVzrV1Oybkq-6PdmEPt9mWQAWzYmmDd-zc1cOZCoIuZ9URLnokfbN8nnsB-V8F5PHk1F_qi62",
+      "expirationTime": null,
+      "keys": {
+        "p256dh": "BMRk3r7X-nCADN-x1o5P_xtWMW9Dl8UaeCxcDlinmkbPnhUMj-4Qt2zbyHW3WCsFb0Ne4CGZ5is2PAqlr1j6r0w",
+        "auth": "mEdpLsN7VwVYwqqoVRZ-NQ"
+      },
+      "is_following": true,
+      "notifications_enabled": true,
+      "user_identifier": null,
+      "updated_at": "2026-10-31T08:30:42.619283+00:00"
     }
   ]
 }

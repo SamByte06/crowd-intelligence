@@ -695,7 +695,6 @@ class CameraWorker:
             return self._latest_jpeg
 
 
-
 class CameraManager:
     """
     Manages multiple CameraWorker instances.
@@ -967,7 +966,6 @@ class CameraManager:
         """Get latest frame JPEG bytes for a gate."""
         worker = self._workers.get(gate_id)
         return worker.get_latest_frame() if worker else None
-
 
 
 # Global singleton

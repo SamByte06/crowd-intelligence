@@ -1,17 +1,4 @@
-"""
-Gate Counter Service — Direction-aware virtual line-crossing detection.
-
-Enforces clear coordinate systems and directional counting zones:
-- Video-frame coordinates: origin (0, 0) is top-left, X increases right, Y increases downward.
-- Baseline is configured at normalized y = lineY.
-- Upper region: personY < lineY - margin (ABOVE the line).
-- Lower region: personY > lineY + margin (BELOW the line).
-- Deadband hysteresis zone: abs(personY - lineY) <= margin (ON_LINE).
-- Consistent person reference point: bottom-center of bounding box ((x1 + x2)/2, y2).
-- Entry Gate target side: LOWER region (BELOW). Counted only on valid ABOVE -> BELOW crossings.
-- Exit Gate target side: UPPER region (ABOVE). Counted only on valid BELOW -> ABOVE crossings.
-- Merely occupying a region never generates counting events.
-"""
+"""Direction-aware virtual line-crossing detection with hysteresis deadband."""
 
 import logging
 import time
@@ -23,20 +10,17 @@ logger = logging.getLogger(__name__)
 
 
 class GateRegion(Enum):
-    """
-    Regions relative to the horizontal counting baseline.
-    Video coordinates: (0, 0) top-left, Y increases downward.
-    """
-    ABOVE = "ABOVE"      # Upper region: personY < lineY - margin
-    BELOW = "BELOW"      # Lower region: personY > lineY + margin
-    ON_LINE = "ON_LINE"  # Hysteresis deadband: abs(personY - lineY) <= margin
+    """Regions relative to the baseline (ABOVE, BELOW, ON_LINE deadband)."""
+    ABOVE = "ABOVE"
+    BELOW = "BELOW"
+    ON_LINE = "ON_LINE"
 
 
 class CrossingSide(Enum):
-    """Legacy side enum for backward compatibility."""
-    POSITIVE = 1  # Lower / BELOW side (y > lineY)
-    NEGATIVE = -1 # Upper / ABOVE side (y < lineY)
-    ON_LINE = 0   # On the line deadband
+    """Crossing sides relative to the line."""
+    POSITIVE = 1
+    NEGATIVE = -1
+    ON_LINE = 0
 
 
 @dataclass
@@ -186,16 +170,7 @@ class GateCounter:
             self._normal_y = 1.0
 
     def _get_region(self, x: float, y: float) -> GateRegion:
-        """
-        Determine which region (ABOVE, BELOW, or ON_LINE deadband) a point is in.
-
-        Video coordinates:
-        - (0, 0) is top-left, Y increases downward.
-        - Upper region: personY < lineY - margin (ABOVE).
-        - Lower region: personY > lineY + margin (BELOW).
-        - Hysteresis deadband: abs(personY - lineY) <= margin (ON_LINE).
-        """
-        # Calculate signed perpendicular distance from (x, y) to baseline
+        """Determine whether a coordinate is ABOVE, BELOW, or in the ON_LINE deadband."""
         vx = x - self.config.start_x
         vy = y - self.config.start_y
         dot = vx * self._normal_x + vy * self._normal_y
@@ -215,13 +190,7 @@ class GateCounter:
         return CrossingSide.ON_LINE
 
     def update(self, detections: list[dict], current_time: float | None = None) -> list[CrossingEvent]:
-        """
-        Process a frame's detections and return confirmed line-crossing events.
-
-        Consistently uses bottom-center of bounding box for every tracked person:
-        personX = (x1 + x2) / 2
-        personY = y2
-        """
+        """Process frame detections and return confirmed crossing events."""
         now = current_time or time.time()
         events: list[CrossingEvent] = []
         seen_tracks = set()

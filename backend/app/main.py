@@ -155,6 +155,11 @@ def _start_all_active_venues():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle: startup and shutdown."""
+    if os.environ.get("TESTING") == "1":
+        _setup_crossing_handler()
+        yield
+        return
+
     # Startup
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     try:
@@ -163,8 +168,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    if os.environ.get("TESTING") != "1":
-        init_db()
+    init_db()
     _setup_crossing_handler()
     _start_all_active_venues()
     camera_manager.preload_models(4)
@@ -294,13 +298,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
-    alert_task = asyncio.create_task(alert_background_worker())
+    alert_task = asyncio.create_task(alert_background_worker()) if not is_testing else None
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
-    alert_task.cancel()
+    if alert_task:
+        alert_task.cancel()
     camera_manager.stop_all()
     logger.info("All camera workers stopped")
 

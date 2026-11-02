@@ -62,3 +62,11 @@ temp_uploads/
 scratch/
 
 fastreid/
+
+# Caches
+.cache/
+backend/.cache/
+.pytest_cache/
+backend/.pytest_cache/
+media_cache/
+backend/media_cache/
