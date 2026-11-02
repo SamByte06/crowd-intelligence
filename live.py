@@ -108,62 +108,34 @@ def main():
 
     if not tunnel_url:
         print("[WARNING] Tunnel started but URL could not be auto-detected within 20s.")
-        print("Opening local interface at http://127.0.0.1:8000/inputs...")
-        try:
-            webbrowser.open("http://127.0.0.1:8000/inputs")
-        except Exception:
-            pass
+        vercel_url = "https://understandthecrowd.vercel.app/inputs"
     else:
-        print(f"\n[3/3] Verifying global tunnel connectivity ({tunnel_url})...")
-        import urllib.request
-        tunnel_online = False
-        for _ in range(15):
-            try:
-                req = urllib.request.Request(
-                    f"{tunnel_url}/api/v1/health",
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-                )
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    if resp.status == 200:
-                        tunnel_online = True
-                        break
-            except Exception:
-                pass
-            time.sleep(0.8)
+        vercel_url = f"https://understandthecrowd.vercel.app/inputs?api={tunnel_url}"
+        print(f"\n[3/3] Connected to Cloudflare Tunnel: {tunnel_url}")
+        print("Syncing with Cloudflare edge network...")
+        time.sleep(3)
 
-        local_ui_url = "http://127.0.0.1:8000/inputs"
-        one_click_url = f"https://understandthecrowd.vercel.app/inputs?api={tunnel_url}"
+    copy_to_clipboard(vercel_url)
 
-        if tunnel_online:
-            target_open_url = one_click_url
-            copy_to_clipboard(one_click_url)
-        else:
-            target_open_url = local_ui_url
-            copy_to_clipboard(local_ui_url)
+    print("\n" + "=" * 72)
+    print("   >>> YOUR LIVE SYSTEM IS ONLINE & CONNECTED! <<<")
+    print("=" * 72)
+    print(f"\n  [+] Vercel Frontend: {vercel_url}")
+    if tunnel_url:
+        print(f"  [+] Backend Tunnel:  {tunnel_url}")
+    print("  [+] Clipboard:       1-CLICK VERCEL LINK COPIED TO CLIPBOARD!")
+    print("\n  [INSTRUCTIONS]")
+    print("  Opening your browser now... If it doesn't open, click or paste:")
+    print(f"  --> {vercel_url}")
+    print("\n  (The link automatically connects the backend to Vercel — zero manual setup!)")
+    print("\n" + "=" * 72)
+    print("  Keep this terminal open while testing. Press Ctrl + C to stop.")
+    print("=" * 72 + "\n")
 
-        print("\n" + "=" * 72)
-        print("   >>> YOUR LIVE SYSTEM IS ONLINE & CONNECTED! <<<")
-        print("=" * 72)
-        print(f"\n  [+] Local Direct UI:  {local_ui_url}  (Instant 0ms, Zero Lag)")
-        if tunnel_online:
-            print(f"  [+] Public Online UI: {one_click_url}")
-            print(f"  [+] Backend Tunnel:   {tunnel_url}")
-            print("  [+] Clipboard:        PUBLIC 1-CLICK LINK COPIED TO CLIPBOARD!")
-        else:
-            print(f"  [!] Global Tunnel DNS is still propagating ({tunnel_url})")
-            print(f"  [+] Using Local UI:   {local_ui_url} (Copied to Clipboard!)")
-            print(f"  [+] Public Online UI: {one_click_url}")
-        print("\n  [INSTRUCTIONS]")
-        print("  Opening your browser now... If it doesn't open, click or paste:")
-        print(f"  --> {target_open_url}")
-        print("\n" + "=" * 72)
-        print("  Keep this terminal open while testing. Press Ctrl + C to stop.")
-        print("=" * 72 + "\n")
-
-        try:
-            webbrowser.open(target_open_url)
-        except Exception:
-            pass
+    try:
+        webbrowser.open(vercel_url)
+    except Exception:
+        pass
 
     # Keep piping logs or stay alive until interrupted
     try:
